@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -21,6 +21,7 @@ import {
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
 
 interface PropertyForm {
   // Basic Details
@@ -71,6 +72,20 @@ const availableAmenities = [
   'Parking', 'Security', 'Gym', 'Swimming Pool', 'Garden', 'Power Backup',
   'Elevator', 'Balcony', 'Air Conditioning', 'Furnished', 'Internet', 'Clubhouse'
 ];
+
+// Helper to upload images to Supabase Storage and return public URLs
+async function uploadPropertyImages(files: File[], propertyId: string) {
+  const urls: string[] = [];
+  for (const file of files) {
+    const fileExt = file.name.split('.').pop();
+    const filePath = `${propertyId}/${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
+    const { error: uploadError } = await supabase.storage.from('property-images').upload(filePath, file);
+    if (uploadError) throw uploadError;
+    const { data } = supabase.storage.from('property-images').getPublicUrl(filePath);
+    urls.push(data.publicUrl);
+  }
+  return urls;
+}
 
 export const AddProperty: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -135,12 +150,112 @@ export const AddProperty: React.FC = () => {
     if (!validateStep(3)) return;
 
     setLoading(true);
-    
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    setLoading(false);
-    navigate('/properties');
+    setErrors({});
+
+    try {
+      // 1. Generate a UUID for the property (client-side, to use for image path)
+      const propertyId = crypto.randomUUID();
+      let imageUrls: string[] = [];
+      if (form.images.length > 0) {
+        try {
+          console.log('Uploading property images...');
+          imageUrls = await uploadPropertyImages(form.images, propertyId);
+          console.log('Image upload success:', imageUrls);
+        } catch (imgErr: any) {
+          console.error('Image upload failed:', imgErr);
+          setErrors({ submit: 'Image upload failed: ' + (imgErr.message || imgErr.error_description || 'Unknown error') });
+          setLoading(false);
+          return;
+        }
+      }
+
+      // 2. Insert property (without rent - rent goes in leases table)
+      console.log('Inserting property...');
+      const { data: property, error: propError } = await supabase
+        .from('properties')
+        .insert({
+          id: propertyId,
+          owner_id: user?.id,
+          name: form.name,
+          address: form.address,
+          property_type: form.propertyType,
+          bedrooms: form.bedrooms,
+          bathrooms: form.bathrooms,
+          area: form.area,
+          description: form.description,
+          amenities: form.amenities.join(','),
+          images: JSON.stringify(imageUrls),
+          status: form.tenantName.trim() ? 'occupied' : 'vacant',
+        })
+        .select()
+        .single();
+
+      if (propError) {
+        console.error('Property insert failed:', propError);
+        setErrors({ submit: propError.message || 'Failed to create property' });
+        setLoading(false);
+        return;
+      }
+      console.log('Property insert success:', property);
+
+      // 3. Optionally insert tenant and lease
+      if (form.tenantName.trim()) {
+        const tenantId = crypto.randomUUID();
+        console.log('Inserting tenant...');
+        const { data: tenant, error: tenantError } = await supabase
+          .from('tenants')
+          .insert({
+            id: tenantId,
+            name: form.tenantName,
+            phone: form.tenantPhone,
+            email: form.tenantEmail,
+            current_property_id: propertyId,
+          })
+          .select()
+          .single();
+
+        if (tenantError) {
+          console.error('Tenant insert failed:', tenantError);
+          setErrors({ submit: tenantError.message || 'Failed to create tenant' });
+          setLoading(false);
+          return;
+        }
+        console.log('Tenant insert success:', tenant);
+
+        const leaseId = crypto.randomUUID();
+        console.log('Inserting lease...');
+        const { data: lease, error: leaseError } = await supabase
+          .from('leases')
+          .insert({
+            id: leaseId,
+            property_id: propertyId,
+            tenant_id: tenantId,
+            start_date: form.leaseStart,
+            end_date: form.leaseEnd,
+            monthly_rent: form.rent,
+            security_deposit: form.securityDeposit,
+            maintenance_charges: form.maintenanceCharges,
+            is_active: true,
+          })
+          .select()
+          .single();
+
+        if (leaseError) {
+          console.error('Lease insert failed:', leaseError);
+          setErrors({ submit: leaseError.message || 'Failed to create lease' });
+          setLoading(false);
+          return;
+        }
+        console.log('Lease insert success:', lease);
+      }
+
+      setLoading(false);
+      navigate('/properties');
+    } catch (err: any) {
+      console.error('Property creation failed:', err);
+      setErrors({ submit: err.message || 'Failed to create property' });
+      setLoading(false);
+    }
   };
 
   const handleChange = (field: keyof PropertyForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -158,6 +273,12 @@ export const AddProperty: React.FC = () => {
         ? prev.amenities.filter(a => a !== amenity)
         : [...prev.amenities, amenity]
     }));
+  };
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleChooseFilesClick = () => {
+    fileInputRef.current?.click();
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -297,6 +418,9 @@ export const AddProperty: React.FC = () => {
 
         {/* Form */}
         <div className="glass-card rounded-xl p-6">
+          {errors.submit && (
+            <div className="text-red-600 text-center mb-4">{errors.submit}</div>
+          )}
           {/* Step 1: Basic Details */}
           {currentStep === 1 && (
             <div className="space-y-6">
@@ -414,14 +538,12 @@ export const AddProperty: React.FC = () => {
                     multiple
                     accept="image/*"
                     onChange={handleImageUpload}
-                    className="hidden"
-                    id="image-upload"
+                    ref={fileInputRef}
+                    style={{ display: 'none' }}
                   />
-                  <label htmlFor="image-upload">
-                    <Button variant="outline" className="cursor-pointer">
-                      Choose Files
-                    </Button>
-                  </label>
+                  <Button variant="outline" className="cursor-pointer" onClick={handleChooseFilesClick}>
+                    Choose Files
+                  </Button>
                 </div>
                 
                 {form.images.length > 0 && (

@@ -279,6 +279,7 @@ const LandingPage = () => {
 
 // Main App with Routing
 function App() {
+  const { user } = useAuth();
   return (
     <Router>
       <Routes>

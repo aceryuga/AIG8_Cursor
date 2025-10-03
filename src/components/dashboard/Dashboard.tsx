@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
 import { Link } from 'react-router-dom';
 import { 
   Building2, 
@@ -37,6 +38,27 @@ interface Property {
   paymentStatus: 'paid' | 'pending' | 'overdue';
   image: string;
   dueDate: string;
+}
+
+interface SupabaseProperty {
+  id: string;
+  name: string;
+  address: string;
+  status: string;
+  images: string;
+  leases?: {
+    monthly_rent: number;
+    security_deposit: number;
+    maintenance_charges: number;
+    start_date: string;
+    end_date: string;
+    is_active: boolean;
+    tenants?: {
+      name: string;
+      phone: string;
+      email: string;
+    };
+  }[];
 }
 
 interface Activity {
@@ -133,6 +155,11 @@ export const Dashboard: React.FC = () => {
   const [showContactSupport, setShowContactSupport] = useState(false);
   const [showFAQ, setShowFAQ] = useState(false);
   const [showVideoTutorials, setShowVideoTutorials] = useState(false);
+  
+  // Supabase data states
+  const [supabaseProperties, setSupabaseProperties] = useState<SupabaseProperty[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   // Close dropdowns when clicking outside
   React.useEffect(() => {
@@ -156,15 +183,91 @@ export const Dashboard: React.FC = () => {
     };
   }, [showNotifications, showHelp]);
 
+  // Fetch data from Supabase
+  useEffect(() => {
+    if (!user?.id) {
+      setDataLoading(false);
+      return;
+    }
+
+    const fetchData = async () => {
+      try {
+        setDataLoading(true);
+        setDataError(null);
+
+        // Fetch properties with their leases and tenants
+        const { data: properties, error: propError } = await supabase
+          .from('properties')
+          .select(`
+            *,
+            leases(
+              monthly_rent,
+              security_deposit,
+              maintenance_charges,
+              start_date,
+              end_date,
+              is_active,
+              tenants(
+                name,
+                phone,
+                email
+              )
+            )
+          `)
+          .eq('owner_id', user.id);
+
+        if (propError) {
+          throw propError;
+        }
+
+        setSupabaseProperties(properties || []);
+      } catch (error: any) {
+        console.error('Error fetching dashboard data:', error);
+        setDataError(error.message || 'Failed to load dashboard data');
+      } finally {
+        setDataLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user?.id]);
+
   const handleLogout = () => {
     logout();
     window.location.href = '/auth/login';
   };
 
-  const totalProperties = mockProperties.length;
-  const monthlyRent = mockProperties.reduce((sum, prop) => sum + prop.rent, 0);
-  const paidProperties = mockProperties.filter(p => p.paymentStatus === 'paid').length;
-  const pendingAmount = mockProperties
+  // Use real data from Supabase, fallback to mock data if loading
+  const properties = dataLoading ? mockProperties : supabaseProperties.map(prop => {
+    // Get active lease and tenant data
+    const activeLease = prop.leases && prop.leases.length > 0 ? 
+      prop.leases.find(lease => lease.is_active) || prop.leases[0] : null;
+    const tenant = activeLease?.tenants || null;
+    
+    return {
+      id: prop.id,
+      name: prop.name || 'Unnamed Property',
+      address: prop.address || 'Address not available',
+      rent: activeLease?.monthly_rent || 0,
+      tenant: tenant?.name || 'Vacant',
+      status: prop.status as 'occupied' | 'vacant' | 'maintenance',
+      paymentStatus: 'pending' as const, // Will be populated when we add payment data
+      image: prop.images ? (() => {
+        try {
+          const parsed = JSON.parse(prop.images);
+          return Array.isArray(parsed) && parsed.length > 0 ? parsed[0] : '/placeholder-property.jpg';
+        } catch {
+          return '/placeholder-property.jpg';
+        }
+      })() : '/placeholder-property.jpg',
+      dueDate: activeLease?.end_date || 'No lease'
+    };
+  });
+
+  const totalProperties = properties.length;
+  const monthlyRent = properties.reduce((sum, prop) => sum + prop.rent, 0);
+  const paidProperties = properties.filter(p => p.paymentStatus === 'paid').length;
+  const pendingAmount = properties
     .filter(p => p.paymentStatus === 'overdue')
     .reduce((sum, prop) => sum + prop.rent, 0);
 

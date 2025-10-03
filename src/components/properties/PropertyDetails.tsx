@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, Building2, LogOut, Bell, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Camera, Save, AlertCircle } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
 
 interface Property {
   id: string;
@@ -148,6 +149,11 @@ export const PropertyDetails: React.FC = () => {
   const [showUploadDocument, setShowUploadDocument] = useState(false);
   const [showEditProperty, setShowEditProperty] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  
+  // Supabase data states
+  const [property, setProperty] = useState<Property | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [paymentForm, setPaymentForm] = useState<PaymentForm>({
     amount: 15000,
     date: new Date().toISOString().split('T')[0],
@@ -168,17 +174,103 @@ export const PropertyDetails: React.FC = () => {
     description: mockProperty.description
   });
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [dataLoading, setDataLoading] = useState(false);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+
+  // Fetch property data from Supabase
+  useEffect(() => {
+    if (!id || !user?.id) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchProperty = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const { data, error: fetchError } = await supabase
+          .from('properties')
+          .select(`
+            *,
+            leases(
+              monthly_rent,
+              security_deposit,
+              maintenance_charges,
+              start_date,
+              end_date,
+              is_active,
+              tenants(
+                name,
+                phone,
+                email
+              )
+            )
+          `)
+          .eq('id', id)
+          .eq('owner_id', user.id)
+          .single();
+
+        if (fetchError) {
+          throw fetchError;
+        }
+
+        if (data) {
+          const activeLease = data.leases && data.leases.length > 0 ? 
+            data.leases.find(lease => lease.is_active) || data.leases[0] : null;
+          const tenant = activeLease?.tenants || null;
+
+          const propertyData: Property = {
+            id: data.id,
+            name: data.name || 'Unnamed Property',
+            address: data.address || 'Address not available',
+            rent: activeLease?.monthly_rent || 0,
+            tenant: tenant?.name || 'Vacant',
+            tenantPhone: tenant?.phone || '',
+            tenantEmail: tenant?.email || '',
+            status: (data.status as 'occupied' | 'vacant' | 'maintenance') || 'vacant',
+            paymentStatus: 'pending' as const,
+            image: data.images ? (() => {
+              try {
+                const parsed = JSON.parse(data.images);
+                return Array.isArray(parsed) && parsed.length > 0 ? parsed[0] : '/placeholder-currentProperty.jpg';
+              } catch {
+                return '/placeholder-currentProperty.jpg';
+              }
+            })() : '/placeholder-currentProperty.jpg',
+            dueDate: activeLease?.end_date || 'No lease',
+            propertyType: (data.property_type as 'apartment' | 'villa' | 'office' | 'shop') || 'apartment',
+            bedrooms: data.bedrooms || 1,
+            area: data.area || 0,
+            description: data.description || '',
+            amenities: data.amenities ? data.amenities.split(',') : [],
+            leaseStart: activeLease?.start_date || '',
+            leaseEnd: activeLease?.end_date || '',
+            securityDeposit: activeLease?.security_deposit || 0
+          };
+
+          setProperty(propertyData);
+        }
+      } catch (err: any) {
+        console.error('Error fetching property:', err);
+        setError(err.message || 'Failed to load property details');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProperty();
+  }, [id, user?.id]);
 
   const handleLogout = () => {
     logout();
     navigate('/auth/login');
   };
 
-  const property = mockProperty; // In real app, fetch by id
+  // Use real property data or fallback to mock
+  const currentProperty = property || mockProperty;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -224,11 +316,11 @@ export const PropertyDetails: React.FC = () => {
   };
 
   const handleCall = () => {
-    window.open(`tel:${property.tenantPhone}`, '_self');
+    window.open(`tel:${currentProperty.tenantPhone}`, '_self');
   };
 
   const handleEmail = () => {
-    window.open(`mailto:${property.tenantEmail}`, '_self');
+    window.open(`mailto:${currentProperty.tenantEmail}`, '_self');
   };
 
   const handleUploadDocument = async () => {
@@ -287,6 +379,27 @@ export const PropertyDetails: React.FC = () => {
     { id: 'documents', label: 'Documents' },
     { id: 'tenant', label: 'Tenant Details' }
   ];
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen relative overflow-hidden floating-orbs flex items-center justify-center">
+        <div className="text-glass">Loading property details...</div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="min-h-screen relative overflow-hidden floating-orbs flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-red-600 mb-4">Error: {error}</div>
+          <Button onClick={() => window.location.reload()}>Retry</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen relative overflow-hidden floating-orbs">
@@ -370,32 +483,32 @@ export const PropertyDetails: React.FC = () => {
             Properties
           </Link>
           <span className="text-glass-muted">/</span>
-          <span className="text-glass">{property.name}</span>
+          <span className="text-glass">{currentProperty.name}</span>
         </div>
 
         {/* Property Header */}
         <div className="glass-card rounded-xl p-6 mb-8">
           <div className="flex flex-col lg:flex-row gap-6">
             <img
-              src={property.image}
-              alt={property.name}
+              src={currentProperty.image}
+              alt={currentProperty.name}
               className="w-full lg:w-80 h-60 object-cover rounded-lg"
             />
             
             <div className="flex-1">
               <div className="flex items-start justify-between mb-4">
                 <div>
-                  <h1 className="text-3xl font-bold text-glass mb-2">{property.name}</h1>
+                  <h1 className="text-3xl font-bold text-glass mb-2">{currentProperty.name}</h1>
                   <p className="text-glass-muted flex items-center gap-1 mb-2">
                     <MapPin size={16} />
-                    {property.address}
+                    {currentProperty.address}
                   </p>
                   <div className="flex gap-2 mb-4">
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(property.status)}`}>
-                      {property.status}
+                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(currentProperty.status)}`}>
+                      {currentProperty.status}
                     </span>
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
-                      {property.paymentStatus}
+                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusColor(currentProperty.paymentStatus)}`}>
+                      {currentProperty.paymentStatus}
                     </span>
                   </div>
                 </div>
@@ -414,21 +527,21 @@ export const PropertyDetails: React.FC = () => {
 
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">₹{property.rent.toLocaleString()}</p>
+                  <p className="text-2xl font-bold text-glass">₹{currentProperty.rent.toLocaleString()}</p>
                   <p className="text-sm text-glass-muted">Monthly Rent</p>
                 </div>
                 <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">{property.area}</p>
+                  <p className="text-2xl font-bold text-glass">{currentProperty.area}</p>
                   <p className="text-sm text-glass-muted">Sq Ft</p>
                 </div>
-                {property.bedrooms && (
+                {currentProperty.bedrooms && (
                   <div className="glass rounded-lg p-3">
-                    <p className="text-2xl font-bold text-glass">{property.bedrooms}</p>
+                    <p className="text-2xl font-bold text-glass">{currentProperty.bedrooms}</p>
                     <p className="text-sm text-glass-muted">Bedrooms</p>
                   </div>
                 )}
                 <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">₹{property.securityDeposit.toLocaleString()}</p>
+                  <p className="text-2xl font-bold text-glass">₹{currentProperty.securityDeposit.toLocaleString()}</p>
                   <p className="text-sm text-glass-muted">Security Deposit</p>
                 </div>
               </div>
@@ -477,13 +590,13 @@ export const PropertyDetails: React.FC = () => {
               <div className="space-y-6">
                 <div>
                   <h3 className="text-lg font-semibold text-glass mb-3">Description</h3>
-                  <p className="text-glass-muted">{property.description}</p>
+                  <p className="text-glass-muted">{currentProperty.description}</p>
                 </div>
 
                 <div>
                   <h3 className="text-lg font-semibold text-glass mb-3">Amenities</h3>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                    {property.amenities.map((amenity, index) => (
+                    {currentProperty.amenities.map((amenity, index) => (
                       <div key={index} className="glass rounded-lg p-2 text-center">
                         <span className="text-sm text-glass">{amenity}</span>
                       </div>
@@ -497,22 +610,22 @@ export const PropertyDetails: React.FC = () => {
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Type:</span>
-                        <span className="text-glass capitalize">{property.propertyType}</span>
+                        <span className="text-glass capitalize">{currentProperty.propertyType}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Area:</span>
-                        <span className="text-glass">{property.area} sq ft</span>
+                        <span className="text-glass">{currentProperty.area} sq ft</span>
                       </div>
-                      {property.bedrooms && (
+                      {currentProperty.bedrooms && (
                         <div className="flex justify-between">
                           <span className="text-glass-muted">Bedrooms:</span>
-                          <span className="text-glass">{property.bedrooms}</span>
+                          <span className="text-glass">{currentProperty.bedrooms}</span>
                         </div>
                       )}
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Status:</span>
-                        <span className={`capitalize ${getStatusColor(property.status).split(' ')[0]}`}>
-                          {property.status}
+                        <span className={`capitalize ${getStatusColor(currentProperty.status).split(' ')[0]}`}>
+                          {currentProperty.status}
                         </span>
                       </div>
                     </div>
@@ -523,19 +636,19 @@ export const PropertyDetails: React.FC = () => {
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Start Date:</span>
-                        <span className="text-glass">{new Date(property.leaseStart).toLocaleDateString()}</span>
+                        <span className="text-glass">{new Date(currentProperty.leaseStart).toLocaleDateString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-glass-muted">End Date:</span>
-                        <span className="text-glass">{new Date(property.leaseEnd).toLocaleDateString()}</span>
+                        <span className="text-glass">{new Date(currentProperty.leaseEnd).toLocaleDateString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Monthly Rent:</span>
-                        <span className="text-glass">₹{property.rent.toLocaleString()}</span>
+                        <span className="text-glass">₹{currentProperty.rent.toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Security Deposit:</span>
-                        <span className="text-glass">₹{property.securityDeposit.toLocaleString()}</span>
+                        <span className="text-glass">₹{currentProperty.securityDeposit.toLocaleString()}</span>
                       </div>
                     </div>
                   </div>
@@ -627,7 +740,7 @@ export const PropertyDetails: React.FC = () => {
             {/* Tenant Details Tab */}
             {activeTab === 'tenant' && (
               <div className="space-y-6">
-                {property.tenant ? (
+                {currentProperty.tenant ? (
                   <>
                     <div className="flex items-center justify-between">
                       <h3 className="text-lg font-semibold text-glass">Tenant Information</h3>
@@ -649,7 +762,7 @@ export const PropertyDetails: React.FC = () => {
                           <User size={24} className="text-glass" />
                         </div>
                         <div>
-                          <h4 className="text-xl font-semibold text-glass">{property.tenant}</h4>
+                          <h4 className="text-xl font-semibold text-glass">{currentProperty.tenant}</h4>
                           <p className="text-glass-muted">Current Tenant</p>
                         </div>
                       </div>
@@ -660,11 +773,11 @@ export const PropertyDetails: React.FC = () => {
                           <div className="space-y-2">
                             <div className="flex items-center gap-2">
                               <Phone size={16} className="text-glass-muted" />
-                              <span className="text-glass">{property.tenantPhone}</span>
+                              <span className="text-glass">{currentProperty.tenantPhone}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <Mail size={16} className="text-glass-muted" />
-                              <span className="text-glass">{property.tenantEmail}</span>
+                              <span className="text-glass">{currentProperty.tenantEmail}</span>
                             </div>
                           </div>
                         </div>
@@ -675,12 +788,12 @@ export const PropertyDetails: React.FC = () => {
                             <div className="flex items-center gap-2">
                               <Calendar size={16} className="text-glass-muted" />
                               <span className="text-glass">
-                                {new Date(property.leaseStart).toLocaleDateString()} - {new Date(property.leaseEnd).toLocaleDateString()}
+                                {new Date(currentProperty.leaseStart).toLocaleDateString()} - {new Date(currentProperty.leaseEnd).toLocaleDateString()}
                               </span>
                             </div>
                             <div className="flex items-center gap-2">
                               <IndianRupee size={16} className="text-glass-muted" />
-                              <span className="text-glass">₹{property.rent.toLocaleString()}/month</span>
+                              <span className="text-glass">₹{currentProperty.rent.toLocaleString()}/month</span>
                             </div>
                           </div>
                         </div>
@@ -729,11 +842,11 @@ export const PropertyDetails: React.FC = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-glass-muted">Property:</p>
-                      <p className="text-glass font-medium">{property.name}</p>
+                      <p className="text-glass font-medium">{currentProperty.name}</p>
                     </div>
                     <div>
                       <p className="text-glass-muted">Tenant:</p>
-                      <p className="text-glass font-medium">{property.tenant}</p>
+                      <p className="text-glass font-medium">{currentProperty.tenant}</p>
                     </div>
                   </div>
                 </div>
@@ -843,15 +956,15 @@ export const PropertyDetails: React.FC = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-glass-muted">Name:</p>
-                      <p className="text-glass font-medium">{property.tenant}</p>
+                      <p className="text-glass font-medium">{currentProperty.tenant}</p>
                     </div>
                     <div>
                       <p className="text-glass-muted">Phone:</p>
-                      <p className="text-glass font-medium">{property.tenantPhone}</p>
+                      <p className="text-glass font-medium">{currentProperty.tenantPhone}</p>
                     </div>
                     <div className="md:col-span-2">
                       <p className="text-glass-muted">Email:</p>
-                      <p className="text-glass font-medium">{property.tenantEmail}</p>
+                      <p className="text-glass font-medium">{currentProperty.tenantEmail}</p>
                     </div>
                   </div>
                 </div>
@@ -945,7 +1058,7 @@ export const PropertyDetails: React.FC = () => {
               <div className="space-y-6">
                 <div className="glass rounded-lg p-4">
                   <h3 className="font-medium text-glass mb-2">Property</h3>
-                  <p className="text-glass">{property.name}</p>
+                  <p className="text-glass">{currentProperty.name}</p>
                 </div>
 
                 <div 
@@ -1128,7 +1241,7 @@ export const PropertyDetails: React.FC = () => {
               
               <div className="space-y-4">
                 <p className="text-glass-muted">
-                  Are you sure you want to delete "{property.name}"? This will permanently remove 
+                  Are you sure you want to delete "{currentProperty.name}"? This will permanently remove 
                   the property and all associated data including payment history and documents.
                 </p>
                 

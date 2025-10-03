@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, Filter, Grid3x3 as Grid3X3, List, Plus, MapPin, IndianRupee, User, Phone, Mail, Building2, LogOut, Bell, HelpCircle, SlidersHorizontal, ArrowUpDown } from 'lucide-react';
+import { Search, Filter, Grid3x3 as Grid3X3, List, Plus, MapPin, IndianRupee, User, Phone, Mail, Building2, LogOut, Bell, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
 
 interface Property {
   id: string;
@@ -20,6 +21,32 @@ interface Property {
   propertyType: 'apartment' | 'villa' | 'office' | 'shop';
   bedrooms?: number;
   area: number;
+}
+
+interface SupabaseProperty {
+  id: string;
+  name: string;
+  address: string;
+  status: string;
+  property_type: string;
+  bedrooms: number;
+  area: number;
+  images: string;
+  description: string;
+  amenities: string;
+  leases?: {
+    monthly_rent: number;
+    security_deposit: number;
+    maintenance_charges: number;
+    start_date: string;
+    end_date: string;
+    is_active: boolean;
+    tenants?: {
+      name: string;
+      phone: string;
+      email: string;
+    };
+  }[];
 }
 
 const mockProperties: Property[] = [
@@ -121,6 +148,7 @@ const mockProperties: Property[] = [
 
 export const PropertiesList: React.FC = () => {
   const [properties, setProperties] = useState<Property[]>(mockProperties);
+  const [supabaseProperties, setSupabaseProperties] = useState<SupabaseProperty[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -128,9 +156,147 @@ export const PropertiesList: React.FC = () => {
   const [sortBy, setSortBy] = useState<string>('name');
   const [showFilters, setShowFilters] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+
+  // Fetch properties from Supabase
+  useEffect(() => {
+    if (!user?.id) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchProperties = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const { data, error: fetchError } = await supabase
+          .from('properties')
+          .select(`
+            *,
+            leases(
+              monthly_rent,
+              security_deposit,
+              maintenance_charges,
+              start_date,
+              end_date,
+              is_active,
+              tenants(
+                name,
+                phone,
+                email
+              )
+            )
+          `)
+          .eq('owner_id', user.id);
+
+        if (fetchError) {
+          throw fetchError;
+        }
+
+        setSupabaseProperties(data || []);
+      } catch (err: any) {
+        console.error('Error fetching properties:', err);
+        setError(err.message || 'Failed to load properties');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProperties();
+  }, [user?.id]);
+
+  // Convert Supabase data to UI format
+  useEffect(() => {
+    if (supabaseProperties.length > 0) {
+      const convertedProperties: Property[] = supabaseProperties.map(prop => {
+        // Get active lease and tenant data
+        const activeLease = prop.leases && prop.leases.length > 0 ? 
+          prop.leases.find(lease => lease.is_active) || prop.leases[0] : null;
+        const tenant = activeLease?.tenants || null;
+        
+        return {
+          id: prop.id,
+          name: prop.name || 'Unnamed Property',
+          address: prop.address || 'Address not available',
+          rent: activeLease?.monthly_rent || 0,
+          tenant: tenant?.name || 'Vacant',
+          tenantPhone: tenant?.phone || '',
+          tenantEmail: tenant?.email || '',
+          status: (prop.status as 'occupied' | 'vacant' | 'maintenance') || 'vacant',
+          paymentStatus: 'pending' as const, // Will be populated when we add payment data
+          image: prop.images ? (() => {
+            try {
+              const parsed = JSON.parse(prop.images);
+              return Array.isArray(parsed) && parsed.length > 0 ? parsed[0] : '/placeholder-property.jpg';
+            } catch {
+              return '/placeholder-property.jpg';
+            }
+          })() : '/placeholder-property.jpg',
+          dueDate: activeLease?.end_date || 'No lease',
+          propertyType: (prop.property_type as 'apartment' | 'villa' | 'office' | 'shop') || 'apartment',
+          bedrooms: prop.bedrooms || 1,
+          area: prop.area || 0
+        };
+      });
+      setProperties(convertedProperties);
+    }
+  }, [supabaseProperties]);
+
+  // Delete property function (also deletes related leases and tenants)
+  const deleteProperty = async (id: string) => {
+    try {
+      // First, get all leases for this property to delete related tenants
+      const { data: leases, error: leasesError } = await supabase
+        .from('leases')
+        .select('tenant_id')
+        .eq('property_id', id);
+
+      if (leasesError) {
+        throw leasesError;
+      }
+
+      // Delete related tenants (if any)
+      if (leases && leases.length > 0) {
+        const tenantIds = leases.map(lease => lease.tenant_id).filter(Boolean);
+        if (tenantIds.length > 0) {
+          const { error: tenantsError } = await supabase
+            .from('tenants')
+            .delete()
+            .in('id', tenantIds);
+          
+          if (tenantsError) {
+            console.warn('Error deleting tenants:', tenantsError);
+            // Continue with property deletion even if tenant deletion fails
+          }
+        }
+      }
+
+      // Delete the property (this will cascade delete leases due to foreign key)
+      const { error } = await supabase
+        .from('properties')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        throw error;
+      }
+
+      // Remove from local state
+      setProperties(prev => prev.filter(p => p.id !== id));
+      setSupabaseProperties(prev => prev.filter(p => p.id !== id));
+      
+      // Show success message (you can add a toast notification here)
+      console.log('Property and related data deleted successfully');
+    } catch (err: any) {
+      console.error('Error deleting property:', err);
+      setError(err.message || 'Failed to delete property');
+    }
+  };
 
   const handleLogout = () => {
     logout();
@@ -205,6 +371,19 @@ export const PropertiesList: React.FC = () => {
               <Mail size={12} className="mr-1" />
               Message
             </Button>
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="text-xs text-red-600 hover:bg-red-50 hover:border-red-300"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm('Are you sure you want to delete this property?')) {
+                  deleteProperty(property.id);
+                }
+              }}
+            >
+              <Trash2 size={12} />
+            </Button>
           </div>
         </div>
       </div>
@@ -218,11 +397,11 @@ export const PropertiesList: React.FC = () => {
         
         <div className="flex items-center justify-between mb-3">
           <div>
-            <p className="text-lg font-bold text-glass">₹{property.rent.toLocaleString()}</p>
+            <p className="text-lg font-bold text-glass">₹{(property.rent || 0).toLocaleString()}</p>
             <p className="text-xs text-glass-muted">per month</p>
           </div>
           <div className="text-right">
-            <p className="text-sm text-glass-muted">{property.area} sq ft</p>
+            <p className="text-sm text-glass-muted">{property.area || 0} sq ft</p>
             {property.bedrooms && (
               <p className="text-xs text-glass-muted">{property.bedrooms} BHK</p>
             )}
@@ -276,12 +455,12 @@ export const PropertiesList: React.FC = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-6">
               <div>
-                <p className="text-lg font-bold text-glass">₹{property.rent.toLocaleString()}</p>
+                <p className="text-lg font-bold text-glass">₹{(property.rent || 0).toLocaleString()}</p>
                 <p className="text-xs text-glass-muted">per month</p>
               </div>
               <div>
-                <p className="text-sm text-glass-muted">{property.area} sq ft</p>
-                {property.bedrooms && (
+                <p className="text-sm text-glass-muted">{property.area || 0} sq ft</p>
+                {(property.bedrooms || 0) > 0 && (
                   <p className="text-xs text-glass-muted">{property.bedrooms} BHK</p>
                 )}
               </div>
@@ -299,6 +478,18 @@ export const PropertiesList: React.FC = () => {
               </Button>
               <Button size="sm" variant="outline">
                 <Mail size={14} />
+              </Button>
+              <Button 
+                size="sm" 
+                variant="outline"
+                className="text-red-600 hover:bg-red-50 hover:border-red-300"
+                onClick={() => {
+                  if (window.confirm('Are you sure you want to delete this property?')) {
+                    deleteProperty(property.id);
+                  }
+                }}
+              >
+                <Trash2 size={14} />
               </Button>
               <Link to={`/properties/${property.id}`}>
                 <Button size="sm">
@@ -521,19 +712,36 @@ export const PropertiesList: React.FC = () => {
           </p>
         </div>
 
+        {/* Loading State */}
+        {loading && (
+          <div className="text-center py-12">
+            <div className="text-glass-muted">Loading properties...</div>
+          </div>
+        )}
+
+        {/* Error State */}
+        {error && (
+          <div className="text-center py-12">
+            <div className="text-red-600 mb-4">Error: {error}</div>
+            <Button onClick={() => window.location.reload()}>Retry</Button>
+          </div>
+        )}
+
         {/* Properties Grid/List */}
-        {viewMode === 'grid' ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {sortedProperties.map((property) => (
-              <PropertyCard key={property.id} property={property} />
-            ))}
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {sortedProperties.map((property) => (
-              <PropertyListItem key={property.id} property={property} />
-            ))}
-          </div>
+        {!loading && !error && (
+          viewMode === 'grid' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {sortedProperties.map((property) => (
+                <PropertyCard key={property.id} property={property} />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {sortedProperties.map((property) => (
+                <PropertyListItem key={property.id} property={property} />
+              ))}
+            </div>
+          )
         )}
 
         {/* Empty State */}
