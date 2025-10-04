@@ -1,9 +1,9 @@
+/* Import Both Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orpheus+Pro:ital,wght@0,400;1,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Import Both Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orpheus+Pro:ital,wght@0,400;1,400&display=swap');
 
 /* Global Font Settings */
 * {

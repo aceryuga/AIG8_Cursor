@@ -153,6 +153,18 @@ export const AddProperty: React.FC = () => {
     setErrors({});
 
     try {
+      // Create timestamp in local timezone format to match existing data
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+      
+      const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+
       // 1. Generate a UUID for the property (client-side, to use for image path)
       const propertyId = crypto.randomUUID();
       let imageUrls: string[] = [];
@@ -186,6 +198,8 @@ export const AddProperty: React.FC = () => {
           amenities: form.amenities.join(','),
           images: JSON.stringify(imageUrls),
           status: form.tenantName.trim() ? 'occupied' : 'vacant',
+          created_at: currentTime, // Local timezone timestamp
+          updated_at: currentTime  // Local timezone timestamp
         })
         .select()
         .single();
@@ -197,6 +211,7 @@ export const AddProperty: React.FC = () => {
         return;
       }
       console.log('Property insert success:', property);
+      console.log('Property creation debug - stored timestamp:', currentTime);
 
       // 3. Optionally insert tenant and lease
       if (form.tenantName.trim()) {
@@ -236,6 +251,8 @@ export const AddProperty: React.FC = () => {
             security_deposit: form.securityDeposit,
             maintenance_charges: form.maintenanceCharges,
             is_active: true,
+            created_at: currentTime, // Local timezone timestamp
+            updated_at: currentTime  // Local timezone timestamp
           })
           .select()
           .single();
@@ -247,6 +264,7 @@ export const AddProperty: React.FC = () => {
           return;
         }
         console.log('Lease insert success:', lease);
+        console.log('Lease creation debug - stored timestamp:', currentTime);
       }
 
       setLoading(false);

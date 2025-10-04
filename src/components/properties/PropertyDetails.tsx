@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, Building2, LogOut, Bell, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Camera, Save, AlertCircle } from 'lucide-react';
+import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, Building2, LogOut, Bell, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Save, AlertCircle } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
+import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
+import { getRelativeTime } from '../../utils/timezoneUtils';
+import { uploadDocument, fetchPropertyDocuments, softDeleteDocument } from '../../utils/documentUpload';
 
 interface Property {
   id: string;
@@ -26,6 +29,7 @@ interface Property {
   leaseStart: string;
   leaseEnd: string;
   securityDeposit: number;
+  maintenanceCharges: number;
 }
 
 interface PaymentHistory {
@@ -63,82 +67,22 @@ interface Document {
   id: string;
   name: string;
   type: string;
-  uploadDate: string;
   size: string;
+  url: string;
+  doc_type?: string;
+  uploadDate: string;
 }
 
-const mockProperty: Property = {
-  id: '1',
-  name: 'Green Valley Apartment',
-  address: 'Sector 18, Noida, UP 201301',
-  rent: 15000,
-  tenant: 'Amit Sharma',
-  tenantPhone: '+91 9876543210',
-  tenantEmail: 'amit.sharma@email.com',
-  status: 'occupied',
-  paymentStatus: 'paid',
-  image: 'https://images.pexels.com/photos/1396122/pexels-photo-1396122.jpeg?auto=compress&cs=tinysrgb&w=800',
-  dueDate: '2025-01-05',
-  propertyType: 'apartment',
-  bedrooms: 2,
-  area: 1200,
-  description: 'Beautiful 2BHK apartment with modern amenities and great connectivity. Perfect for small families.',
-  amenities: ['Parking', 'Security', 'Gym', 'Swimming Pool', 'Garden', 'Power Backup'],
-  leaseStart: '2024-01-01',
-  leaseEnd: '2025-12-31',
-  securityDeposit: 30000
-};
-
-const mockPaymentHistory: PaymentHistory[] = [
-  {
-    id: '1',
-    date: '2025-01-01',
-    amount: 15000,
-    status: 'paid',
-    method: 'UPI',
-    reference: 'TXN123456789'
-  },
-  {
-    id: '2',
-    date: '2024-12-01',
-    amount: 15000,
-    status: 'paid',
-    method: 'Bank Transfer',
-    reference: 'TXN123456788'
-  },
-  {
-    id: '3',
-    date: '2024-11-01',
-    amount: 15000,
-    status: 'paid',
-    method: 'UPI',
-    reference: 'TXN123456787'
-  }
+const docTypes = [
+  { id: 'lease', name: 'Lease Agreement' },
+  { id: 'legal', name: 'Legal Document' },
+  { id: 'financial', name: 'Financial Record' },
+  { id: 'maintenance', name: 'Maintenance Record' },
+  { id: 'insurance', name: 'Insurance Document' },
+  { id: 'id_proof', name: 'ID Proof' },
+  { id: 'other', name: 'Other' }
 ];
 
-const mockDocuments: Document[] = [
-  {
-    id: '1',
-    name: 'Lease Agreement',
-    type: 'PDF',
-    uploadDate: '2024-01-01',
-    size: '2.5 MB'
-  },
-  {
-    id: '2',
-    name: 'Property Photos',
-    type: 'ZIP',
-    uploadDate: '2024-01-01',
-    size: '15.2 MB'
-  },
-  {
-    id: '3',
-    name: 'Tenant ID Proof',
-    type: 'PDF',
-    uploadDate: '2024-01-01',
-    size: '1.8 MB'
-  }
-];
 
 export const PropertyDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -152,11 +96,16 @@ export const PropertyDetails: React.FC = () => {
   
   // Supabase data states
   const [property, setProperty] = useState<Property | null>(null);
+  const [payments, setPayments] = useState<PaymentHistory[]>([]);
+  const [rentPayments, setRentPayments] = useState<RentPayment[]>([]);
+  const [leaseId, setLeaseId] = useState<string>('');
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [maintenanceRequests, setMaintenanceRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [paymentForm, setPaymentForm] = useState<PaymentForm>({
     amount: 15000,
-    date: new Date().toISOString().split('T')[0],
+    date: new Date().toISOString().split('T')[0], // Local date for input
     method: '',
     reference: '',
     notes: ''
@@ -167,17 +116,29 @@ export const PropertyDetails: React.FC = () => {
     method: 'email'
   });
   const [editForm, setEditForm] = useState<EditPropertyForm>({
-    name: mockProperty.name,
-    address: mockProperty.address,
-    rent: mockProperty.rent,
-    securityDeposit: mockProperty.securityDeposit,
-    description: mockProperty.description
+    name: '',
+    address: '',
+    rent: 0,
+    securityDeposit: 0,
+    description: ''
   });
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-  const [dataLoading, setDataLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
+  const [uploading, setUploading] = useState(false);
+  const [selectedDocType, setSelectedDocType] = useState<string>('other');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+
+  // Helper function to format file size
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
 
   // Fetch property data from Supabase
   useEffect(() => {
@@ -196,6 +157,7 @@ export const PropertyDetails: React.FC = () => {
           .select(`
             *,
             leases(
+              id,
               monthly_rent,
               security_deposit,
               maintenance_charges,
@@ -218,9 +180,14 @@ export const PropertyDetails: React.FC = () => {
         }
 
         if (data) {
-          const activeLease = data.leases && data.leases.length > 0 ? 
-            data.leases.find(lease => lease.is_active) || data.leases[0] : null;
+        const activeLease = data.leases && data.leases.length > 0 ? 
+          data.leases.find((lease: any) => lease.is_active) || data.leases[0] : null;
           const tenant = activeLease?.tenants || null;
+
+          // Store the lease ID for payment status calculation
+          if (activeLease) {
+            setLeaseId(activeLease.id);
+          }
 
           const propertyData: Property = {
             id: data.id,
@@ -231,7 +198,7 @@ export const PropertyDetails: React.FC = () => {
             tenantPhone: tenant?.phone || '',
             tenantEmail: tenant?.email || '',
             status: (data.status as 'occupied' | 'vacant' | 'maintenance') || 'vacant',
-            paymentStatus: 'pending' as const,
+            paymentStatus: 'pending' as const, // Will be calculated after payments are loaded
             image: data.images ? (() => {
               try {
                 const parsed = JSON.parse(data.images);
@@ -248,10 +215,83 @@ export const PropertyDetails: React.FC = () => {
             amenities: data.amenities ? data.amenities.split(',') : [],
             leaseStart: activeLease?.start_date || '',
             leaseEnd: activeLease?.end_date || '',
-            securityDeposit: activeLease?.security_deposit || 0
+            securityDeposit: activeLease?.security_deposit || 0,
+            maintenanceCharges: activeLease?.maintenance_charges || 0
           };
 
           setProperty(propertyData);
+        }
+
+        // Fetch payment history
+        const { data: paymentsData, error: paymentsError } = await supabase
+          .from('payments')
+          .select(`
+            *,
+            leases!inner(
+              id,
+              property_id,
+              is_active
+            )
+          `)
+          .eq('leases.property_id', id)
+          .eq('leases.is_active', true)
+          .order('payment_date', { ascending: false });
+
+        if (paymentsError) {
+          console.warn('Error fetching payments:', paymentsError);
+        } else {
+          const formattedPayments: PaymentHistory[] = (paymentsData || []).map(payment => ({
+            id: payment.id,
+            date: payment.payment_date,
+            amount: payment.payment_amount,
+            status: payment.status === 'completed' ? 'paid' : payment.status as 'pending' | 'overdue',
+            method: payment.payment_method,
+            reference: payment.reference || ''
+          }));
+          setPayments(formattedPayments);
+
+          // Also store rent payments for status calculation
+          const rentPaymentsData: RentPayment[] = (paymentsData || []).map(payment => ({
+            id: payment.id,
+            lease_id: (payment.leases as any)?.id || '',
+            payment_date: payment.payment_date,
+            payment_amount: payment.payment_amount,
+            status: payment.status as 'completed' | 'pending' | 'failed'
+          }));
+          
+          
+          setRentPayments(rentPaymentsData);
+        }
+
+        // Fetch documents using the new utility
+        try {
+          const documentsData = await fetchPropertyDocuments(id);
+          const formattedDocuments: Document[] = documentsData.map(doc => ({
+            id: doc.id,
+            name: doc.name,
+            type: doc.doc_type || 'Unknown',
+            size: 'Unknown', // Size not stored in actual table
+            url: doc.url,
+            doc_type: doc.doc_type,
+            uploadDate: doc.uploaded_at || ''
+          }));
+          setDocuments(formattedDocuments);
+        } catch (docError) {
+          console.warn('Error fetching documents:', docError);
+          setDocuments([]);
+        }
+
+        // Fetch maintenance requests
+        const { data: maintenanceData, error: maintenanceError } = await supabase
+          .from('maintenance_requests')
+          .select('*')
+          .eq('property_id', id)
+          .order('created_at', { ascending: false });
+
+        if (maintenanceError) {
+          console.warn('Error fetching maintenance requests:', maintenanceError);
+        } else {
+          setMaintenanceRequests(maintenanceData || []);
         }
       } catch (err: any) {
         console.error('Error fetching property:', err);
@@ -264,13 +304,69 @@ export const PropertyDetails: React.FC = () => {
     fetchProperty();
   }, [id, user?.id]);
 
+
+  // Calculate payment status when lease and payments data are available
+  useEffect(() => {
+    if (property && leaseId && rentPayments.length >= 0 && property.status === 'occupied') {
+      const propertyWithLease: PropertyWithLease = {
+        id: property.id,
+        lease_id: leaseId,
+        monthly_rent: property.rent,
+        start_date: property.leaseStart,
+        is_active: true
+      };
+
+      const rentStatus = calculateRentStatus(propertyWithLease, rentPayments);
+      
+      // Only update if the payment status has actually changed
+      if (property.paymentStatus !== rentStatus.status) {
+        setProperty(prev => prev ? {
+          ...prev,
+          paymentStatus: rentStatus.status
+        } : null);
+      }
+    }
+  }, [leaseId, rentPayments, property?.id, property?.rent, property?.leaseStart, property?.status]);
+
   const handleLogout = () => {
     logout();
     navigate('/auth/login');
   };
 
   // Use real property data or fallback to mock
-  const currentProperty = property || mockProperty;
+  const currentProperty = property;
+
+  // Show loading state while property data is being fetched
+  if (loading) {
+    return (
+      <div className="min-h-screen relative overflow-hidden floating-orbs">
+        <div className="container mx-auto px-4 py-8">
+          <div className="text-center py-20">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+            <p className="text-lg text-glass-muted">Loading property details...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state if property not found
+  if (!currentProperty) {
+    return (
+      <div className="min-h-screen relative overflow-hidden floating-orbs">
+        <div className="container mx-auto px-4 py-8">
+          <div className="text-center py-20">
+            <h1 className="text-2xl font-bold text-glass mb-4">Property Not Found</h1>
+            <p className="text-lg text-glass-muted mb-6">The property you're looking for doesn't exist or has been removed.</p>
+            <Link to="/properties" className="inline-flex items-center gap-2 px-6 py-3 bg-white bg-opacity-10 rounded-lg text-white hover:bg-opacity-20 transition-all">
+              <ArrowLeft size={16} />
+              Back to Properties
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -324,31 +420,167 @@ export const PropertyDetails: React.FC = () => {
   };
 
   const handleUploadDocument = async () => {
-    if (uploadFiles.length === 0) return;
+    console.log('PropertyDetails: handleUploadDocument called, files:', uploadFiles.length, 'property:', property?.id);
+    if (uploadFiles.length === 0 || !property) {
+      console.log('No files or property, returning');
+      return;
+    }
     
-    setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setLoading(false);
-    setShowUploadDocument(false);
-    setUploadFiles([]);
-    alert(`${uploadFiles.length} document(s) uploaded successfully!`);
+    console.log('Starting upload process...');
+    setUploading(true);
+    setUploadProgress({});
+    
+    try {
+      const uploadPromises = uploadFiles.map(async (file, index) => {
+        const fileId = `${Date.now()}-${index}`;
+        
+        // Update progress to show uploading
+        setUploadProgress(prev => ({ ...prev, [fileId]: 0 }));
+        
+        try {
+                const uploadedDoc = await uploadDocument(
+                  file,
+                  property.id,
+                  undefined, // leaseId
+                  undefined, // tenantId
+                  selectedDocType, // docType
+                  (progress) => {
+                    setUploadProgress(prev => ({ ...prev, [fileId]: progress.progress }));
+                  }
+                );
+          
+          // Update progress to show completed
+          setUploadProgress(prev => ({ ...prev, [fileId]: 100 }));
+          
+          return uploadedDoc;
+        } catch (error) {
+          console.error(`Error uploading file ${file.name}:`, error);
+          throw error;
+        }
+      });
+      
+      await Promise.all(uploadPromises);
+      
+      // Refresh documents list
+      const documentsData = await fetchPropertyDocuments(property.id);
+      const formattedDocuments: Document[] = documentsData.map(doc => ({
+        id: doc.id,
+        name: doc.name,
+        type: doc.doc_type || 'Unknown',
+        size: 'Unknown', // Size not stored in actual table
+        url: doc.url,
+        doc_type: doc.doc_type,
+        uploadDate: doc.uploaded_at || ''
+      }));
+      setDocuments(formattedDocuments);
+      
+      setShowUploadDocument(false);
+      setUploadFiles([]);
+      setUploadProgress({});
+      setSelectedDocType('other');
+      alert(`${uploadFiles.length} document(s) uploaded successfully!`);
+      
+    } catch (error) {
+      console.error('Error uploading documents:', error);
+      alert('Failed to upload documents. Please try again.');
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleEditProperty = async () => {
+    if (!property) return;
+    
     setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setLoading(false);
-    setShowEditProperty(false);
-    alert('Property updated successfully!');
+    try {
+      const { error } = await supabase
+        .from('properties')
+        .update({
+          name: editForm.name,
+          address: editForm.address,
+          description: editForm.description
+        })
+        .eq('id', property.id);
+
+      if (error) {
+        throw error;
+      }
+
+      // Update the property state
+      setProperty(prev => prev ? {
+        ...prev,
+        name: editForm.name,
+        address: editForm.address,
+        description: editForm.description
+      } : null);
+
+      setShowEditProperty(false);
+      alert('Property updated successfully!');
+    } catch (err: any) {
+      console.error('Error updating property:', err);
+      alert('Failed to update property: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDeleteProperty = async () => {
+    if (!property) return;
+    
     setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setLoading(false);
-    setShowDeleteConfirm(false);
-    alert('Property deleted successfully!');
-    navigate('/properties');
+    try {
+      // Store timestamp in local timezone format to match existing data
+      const now = new Date();
+      // Create timestamp in the same format as existing data (local timezone without Z)
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+      
+      const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+      const currentDate = `${year}-${month}-${day}`;
+      
+      // Soft delete: set active = 'N' and status = 'vacant' with updated_at timestamp
+      const { error: propError } = await supabase
+        .from('properties')
+        .update({ 
+          active: 'N',
+          status: 'vacant',
+          updated_at: currentTime  // Local timezone timestamp
+        })
+        .eq('id', property.id);
+
+      if (propError) {
+        throw propError;
+      }
+
+      // End any active leases for this property with updated_at timestamp
+      const { error: leaseError } = await supabase
+        .from('leases')
+        .update({ 
+          is_active: false, 
+          end_date: currentDate,
+          updated_at: currentTime  // Local timezone timestamp
+        })
+        .eq('property_id', property.id)
+        .eq('is_active', true);
+
+      if (leaseError) {
+        console.warn('Error ending leases:', leaseError);
+      }
+
+      setShowDeleteConfirm(false);
+      alert('Property deactivated successfully!');
+      navigate('/properties');
+    } catch (err: any) {
+      console.error('Error deactivating property:', err);
+      alert('Failed to deactivate property: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -358,6 +590,36 @@ export const PropertyDetails: React.FC = () => {
 
   const removeFile = (index: number) => {
     setUploadFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleDeleteDocument = async (documentId: string) => {
+    if (!confirm('Are you sure you want to delete this document? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      await softDeleteDocument(documentId);
+      
+      // Refresh documents list
+      if (property) {
+        const documentsData = await fetchPropertyDocuments(property.id);
+        const formattedDocuments: Document[] = documentsData.map(doc => ({
+          id: doc.id,
+          name: doc.name,
+          type: doc.doc_type || 'Unknown',
+          size: 'Unknown',
+          url: doc.url,
+          doc_type: doc.doc_type,
+          uploadDate: doc.uploaded_at || ''
+        }));
+        setDocuments(formattedDocuments);
+      }
+      
+      alert('Document deleted successfully!');
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      alert('Failed to delete document. Please try again.');
+    }
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -377,6 +639,7 @@ export const PropertyDetails: React.FC = () => {
     { id: 'overview', label: 'Overview' },
     { id: 'payments', label: 'Payment History' },
     { id: 'documents', label: 'Documents' },
+    { id: 'maintenance', label: 'Maintenance' },
     { id: 'tenant', label: 'Tenant Details' }
   ];
 
@@ -527,11 +790,11 @@ export const PropertyDetails: React.FC = () => {
 
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">₹{currentProperty.rent.toLocaleString()}</p>
+                  <p className="text-2xl font-bold text-glass">₹{(currentProperty.rent || 0).toLocaleString()}</p>
                   <p className="text-sm text-glass-muted">Monthly Rent</p>
                 </div>
                 <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">{currentProperty.area}</p>
+                  <p className="text-2xl font-bold text-glass">{currentProperty.area || 0}</p>
                   <p className="text-sm text-glass-muted">Sq Ft</p>
                 </div>
                 {currentProperty.bedrooms && (
@@ -541,7 +804,7 @@ export const PropertyDetails: React.FC = () => {
                   </div>
                 )}
                 <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">₹{currentProperty.securityDeposit.toLocaleString()}</p>
+                  <p className="text-2xl font-bold text-glass">₹{(currentProperty.securityDeposit || 0).toLocaleString()}</p>
                   <p className="text-sm text-glass-muted">Security Deposit</p>
                 </div>
               </div>
@@ -554,10 +817,6 @@ export const PropertyDetails: React.FC = () => {
                 <Button variant="outline" className="flex items-center gap-2" onClick={() => setShowContactTenant(true)}>
                   <Phone size={16} />
                   Contact Tenant
-                </Button>
-                <Button variant="outline" className="flex items-center gap-2" onClick={() => setShowUploadDocument(true)}>
-                  <Upload size={16} />
-                  Upload Document
                 </Button>
               </div>
             </div>
@@ -636,19 +895,23 @@ export const PropertyDetails: React.FC = () => {
                     <div className="space-y-2">
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Start Date:</span>
-                        <span className="text-glass">{new Date(currentProperty.leaseStart).toLocaleDateString()}</span>
+                        <span className="text-glass">{currentProperty.leaseStart ? new Date(currentProperty.leaseStart).toLocaleDateString() : 'Not set'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-glass-muted">End Date:</span>
-                        <span className="text-glass">{new Date(currentProperty.leaseEnd).toLocaleDateString()}</span>
+                        <span className="text-glass">{currentProperty.leaseEnd ? new Date(currentProperty.leaseEnd).toLocaleDateString() : 'Not set'}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Monthly Rent:</span>
-                        <span className="text-glass">₹{currentProperty.rent.toLocaleString()}</span>
+                        <span className="text-glass">₹{(currentProperty.rent || 0).toLocaleString()}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-glass-muted">Security Deposit:</span>
-                        <span className="text-glass">₹{currentProperty.securityDeposit.toLocaleString()}</span>
+                        <span className="text-glass">₹{(currentProperty.securityDeposit || 0).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-glass-muted">Maintenance Charges:</span>
+                        <span className="text-glass">₹{(currentProperty.maintenanceCharges || 0).toLocaleString()}</span>
                       </div>
                     </div>
                   </div>
@@ -671,7 +934,12 @@ export const PropertyDetails: React.FC = () => {
                 </div>
 
                 <div className="space-y-3">
-                  {mockPaymentHistory.map((payment) => (
+                  {payments.length === 0 ? (
+                    <div className="text-center py-8 text-glass-muted">
+                      <p>No payment history found</p>
+                    </div>
+                  ) : (
+                    payments.map((payment) => (
                     <div key={payment.id} className="glass rounded-lg p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
@@ -690,7 +958,8 @@ export const PropertyDetails: React.FC = () => {
                         </div>
                       </div>
                     </div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -702,7 +971,9 @@ export const PropertyDetails: React.FC = () => {
                   <h3 className="text-lg font-semibold text-glass">Documents</h3>
                   <Button 
                     className="flex items-center gap-2"
-                    onClick={() => setShowUploadDocument(true)}
+                    onClick={() => {
+                      setShowUploadDocument(true);
+                    }}
                   >
                     <Upload size={16} />
                     Upload Document
@@ -710,29 +981,112 @@ export const PropertyDetails: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {mockDocuments.map((document) => (
+                  {documents.length === 0 ? (
+                    <div className="col-span-full text-center py-8 text-glass-muted">
+                      <p>No documents found</p>
+                    </div>
+                  ) : (
+                    documents.map((document) => (
                     <div key={document.id} className="glass rounded-lg p-4">
                       <div className="flex items-start justify-between mb-3">
                         <div className="w-10 h-10 glass rounded-lg flex items-center justify-center">
                           <FileText size={20} className="text-glass" />
                         </div>
                         <div className="flex gap-1">
-                          <Button variant="ghost" size="sm" className="p-1">
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="p-1"
+                            onClick={() => window.open(document.url, '_blank')}
+                            title="View document"
+                          >
                             <Eye size={14} />
                           </Button>
-                          <Button variant="ghost" size="sm" className="p-1">
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="p-1"
+                            onClick={() => {
+                              const link = window.document.createElement('a');
+                              link.href = document.url;
+                              link.download = document.name;
+                              link.click();
+                            }}
+                            title="Download document"
+                          >
                             <Download size={14} />
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="p-1 text-red-600 hover:text-red-700 hover:bg-red-100"
+                            onClick={() => handleDeleteDocument(document.id)}
+                            title="Delete document"
+                          >
+                            <Trash2 size={14} />
                           </Button>
                         </div>
                       </div>
                       
                       <h4 className="font-medium text-glass mb-1">{document.name}</h4>
-                      <p className="text-sm text-glass-muted mb-1">{document.type} • {document.size}</p>
+                      <p className="text-sm text-glass-muted mb-1">
+                        {document.type} • {document.size}
+                      </p>
                       <p className="text-xs text-glass-muted">
-                        Uploaded {new Date(document.uploadDate).toLocaleDateString()}
+                        Uploaded {getRelativeTime(document.uploadDate)}
                       </p>
                     </div>
-                  ))}
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Maintenance Tab */}
+            {activeTab === 'maintenance' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold text-glass">Maintenance Requests</h3>
+                  <Button className="flex items-center gap-2">
+                    <AlertTriangle size={16} />
+                    New Request
+                  </Button>
+                </div>
+
+                <div className="space-y-3">
+                  {maintenanceRequests.length === 0 ? (
+                    <div className="text-center py-8 text-glass-muted">
+                      <p>No maintenance requests found</p>
+                    </div>
+                  ) : (
+                    maintenanceRequests.map((request) => (
+                      <div key={request.id} className="glass rounded-lg p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                              request.status === 'completed' ? 'bg-green-100 text-green-700' :
+                              request.status === 'in_progress' ? 'bg-orange-100 text-orange-600' :
+                              'bg-red-100 text-red-600'
+                            }`}>
+                              <AlertTriangle size={16} />
+                            </div>
+                            <div>
+                              <p className="font-medium text-glass">{request.title || 'Maintenance Request'}</p>
+                              <p className="text-sm text-glass-muted">{new Date(request.created_at).toLocaleDateString()}</p>
+                            </div>
+                          </div>
+                          
+                          <div className="text-right">
+                            <p className="text-sm text-glass capitalize">{request.status}</p>
+                            <p className="text-xs text-glass-muted">Priority: {request.priority || 'Medium'}</p>
+                          </div>
+                        </div>
+                        {request.description && (
+                          <p className="text-sm text-glass-muted mt-2">{request.description}</p>
+                        )}
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -788,12 +1142,12 @@ export const PropertyDetails: React.FC = () => {
                             <div className="flex items-center gap-2">
                               <Calendar size={16} className="text-glass-muted" />
                               <span className="text-glass">
-                                {new Date(currentProperty.leaseStart).toLocaleDateString()} - {new Date(currentProperty.leaseEnd).toLocaleDateString()}
+                                {currentProperty.leaseStart ? new Date(currentProperty.leaseStart).toLocaleDateString() : 'Not set'} - {currentProperty.leaseEnd ? new Date(currentProperty.leaseEnd).toLocaleDateString() : 'Not set'}
                               </span>
                             </div>
                             <div className="flex items-center gap-2">
                               <IndianRupee size={16} className="text-glass-muted" />
-                              <span className="text-glass">₹{currentProperty.rent.toLocaleString()}/month</span>
+                              <span className="text-glass">₹{(currentProperty.rent || 0).toLocaleString()}/month</span>
                             </div>
                           </div>
                         </div>
@@ -1037,7 +1391,7 @@ export const PropertyDetails: React.FC = () => {
 
       {/* Upload Document Modal */}
       {showUploadDocument && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
           <div className="glass-card rounded-xl max-w-2xl w-full">
             <div className="p-6">
               <div className="flex items-center justify-between mb-6">
@@ -1048,7 +1402,12 @@ export const PropertyDetails: React.FC = () => {
                   <h2 className="text-2xl font-bold text-glass">Upload Document</h2>
                 </div>
                 <button
-                  onClick={() => setShowUploadDocument(false)}
+                  onClick={() => {
+                    setShowUploadDocument(false);
+                    setSelectedDocType('other');
+                    setUploadFiles([]);
+                    setUploadProgress({});
+                  }}
                   className="p-2 hover:bg-white hover:bg-opacity-20 rounded-lg transition-colors"
                 >
                   <X size={20} className="text-glass-muted" />
@@ -1061,12 +1420,40 @@ export const PropertyDetails: React.FC = () => {
                   <p className="text-glass">{currentProperty.name}</p>
                 </div>
 
+                {/* Document Type Selection */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-glass">Document Type</label>
+                  <select
+                    value={selectedDocType}
+                    onChange={(e) => {
+                      setSelectedDocType(e.target.value);
+                    }}
+                    className="w-full p-3 glass rounded-lg border border-white border-opacity-20 focus:border-green-800 focus:outline-none text-glass"
+                  >
+                    {docTypes.map((type) => (
+                      <option key={type.id} value={type.id}>
+                        {type.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div 
                   className="border-2 border-dashed border-white border-opacity-30 rounded-lg p-6 text-center hover:border-green-800 transition-colors cursor-pointer"
                   onDragEnter={handleDrag}
                   onDragLeave={handleDrag}
                   onDragOver={handleDrag}
                   onDrop={handleDrop}
+                  onClick={(e) => {
+                    // Only trigger if the click is directly on the drag area, not on the button
+                    if (e.target === e.currentTarget) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (fileInputRef.current) {
+                        fileInputRef.current.click();
+                      }
+                    }
+                  }}
                 >
                   <Upload size={32} className="mx-auto text-glass-muted mb-4" />
                   <p className="text-glass-muted mb-4">
@@ -1079,42 +1466,73 @@ export const PropertyDetails: React.FC = () => {
                     onChange={handleFileUpload}
                     className="hidden"
                     id="document-upload"
+                    ref={fileInputRef}
                   />
-                  <label htmlFor="document-upload">
-                    <Button variant="outline" className="cursor-pointer" type="button">
-                      Choose Files
-                    </Button>
-                  </label>
+                  <Button 
+                    variant="outline" 
+                    className="cursor-pointer" 
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (fileInputRef.current) {
+                        fileInputRef.current.click();
+                      }
+                    }}
+                  >
+                    Choose Files
+                  </Button>
                 </div>
 
                 {uploadFiles.length > 0 && (
                   <div className="space-y-3">
                     <h3 className="font-medium text-glass">Selected Files ({uploadFiles.length})</h3>
-                    {uploadFiles.map((file, index) => (
-                      <div key={index} className="flex items-center justify-between p-3 glass rounded-lg">
-                        <div className="flex items-center gap-3">
-                          <FileText size={20} className="text-glass-muted" />
-                          <div>
-                            <p className="font-medium text-glass">{file.name}</p>
-                            <p className="text-sm text-glass-muted">
-                              {(file.size / 1024 / 1024).toFixed(2)} MB
-                            </p>
+                    {uploadFiles.map((file, index) => {
+                      const fileId = `${Date.now()}-${index}`;
+                      const progress = uploadProgress[fileId] || 0;
+                      const isUploading = uploading && progress < 100;
+                      
+                      return (
+                        <div key={index} className="flex items-center justify-between p-3 glass rounded-lg">
+                          <div className="flex items-center gap-3 flex-1">
+                            <FileText size={20} className="text-glass-muted" />
+                            <div className="flex-1">
+                              <p className="font-medium text-glass">{file.name}</p>
+                              <p className="text-sm text-glass-muted">
+                                {formatFileSize(file.size)}
+                              </p>
+                              {isUploading && (
+                                <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                                  <div 
+                                    className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                                    style={{ width: `${progress}%` }}
+                                  ></div>
+                                </div>
+                              )}
+                            </div>
                           </div>
+                          {!isUploading && (
+                            <button
+                              onClick={() => removeFile(index)}
+                              className="p-1 hover:bg-red-100 hover:bg-opacity-20 rounded transition-colors"
+                            >
+                              <X size={16} className="text-red-600" />
+                            </button>
+                          )}
                         </div>
-                        <button
-                          onClick={() => removeFile(index)}
-                          className="p-1 hover:bg-red-100 hover:bg-opacity-20 rounded transition-colors"
-                        >
-                          <X size={16} className="text-red-600" />
-                        </button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 
                 <div className="flex gap-4">
                   <Button
-                    onClick={() => setShowUploadDocument(false)}
+                    onClick={() => {
+                      setShowUploadDocument(false);
+                      setSelectedDocType('other');
+                      setUploadFiles([]);
+                      setUploadProgress({});
+                    }}
                     variant="outline"
                     className="flex-1"
                   >
@@ -1122,11 +1540,11 @@ export const PropertyDetails: React.FC = () => {
                   </Button>
                   <Button
                     onClick={handleUploadDocument}
-                    loading={loading}
-                    disabled={uploadFiles.length === 0}
+                    loading={uploading}
+                    disabled={uploadFiles.length === 0 || uploading}
                     className="flex-1"
                   >
-                    Upload Documents
+                    {uploading ? 'Uploading...' : 'Upload Documents'}
                   </Button>
                 </div>
               </div>

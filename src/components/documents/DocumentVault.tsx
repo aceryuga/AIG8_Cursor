@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   Building2, 
@@ -8,145 +8,67 @@ import {
   User, 
   Plus, 
   Search, 
-  Filter, 
   Grid3x3 as Grid3X3, 
   List, 
   FileText, 
   Upload, 
   Download, 
   Eye, 
-  Calendar, 
   AlertTriangle,
-  Clock,
-  CheckCircle,
   Folder,
   Image,
   FileSpreadsheet,
   File,
   SlidersHorizontal,
-  ArrowUpDown
+  ArrowUpDown,
+  X,
+  Trash2
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
+import { fetchUserDocuments, uploadDocument, softDeleteDocument } from '../../utils/documentUpload';
+import { supabase } from '../../lib/supabase';
+import { getRelativeTime } from '../../utils/timezoneUtils';
 
 interface Document {
   id: string;
   name: string;
-  category: 'lease' | 'legal' | 'financial' | 'maintenance' | 'insurance' | 'other';
+  doc_type?: string;
   propertyName: string;
-  type: 'pdf' | 'image' | 'excel' | 'word';
+  type: string;
   size: string;
   uploadDate: string;
-  expiryDate?: string;
-  status: 'active' | 'expiring' | 'expired';
+  url: string;
   thumbnail: string;
-  description?: string;
 }
 
-interface DocumentStats {
-  totalDocuments: number;
-  expiringDocuments: number;
-  storageUsed: string;
-  categoriesCount: number;
-}
 
-const mockDocuments: Document[] = [
-  {
-    id: '1',
-    name: 'Lease Agreement - Green Valley',
-    category: 'lease',
-    propertyName: 'Green Valley Apartment',
-    type: 'pdf',
-    size: '2.5 MB',
-    uploadDate: '2024-01-15',
-    expiryDate: '2025-12-31',
-    status: 'active',
-    thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
-    description: 'Main lease agreement with tenant Amit Sharma'
-  },
-  {
-    id: '2',
-    name: 'Property Insurance Policy',
-    category: 'insurance',
-    propertyName: 'Sunrise Villa',
-    type: 'pdf',
-    size: '1.8 MB',
-    uploadDate: '2024-02-10',
-    expiryDate: '2025-02-10',
-    status: 'expiring',
-    thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
-    description: 'Comprehensive property insurance coverage'
-  },
-  {
-    id: '3',
-    name: 'Maintenance Receipt - Plumbing',
-    category: 'maintenance',
-    propertyName: 'City Center Office',
-    type: 'image',
-    size: '850 KB',
-    uploadDate: '2024-03-05',
-    status: 'active',
-    thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
-    description: 'Plumbing repair work invoice and receipt'
-  },
-  {
-    id: '4',
-    name: 'Tax Assessment Document',
-    category: 'legal',
-    propertyName: 'Metro Plaza Shop',
-    type: 'pdf',
-    size: '3.2 MB',
-    uploadDate: '2024-01-20',
-    expiryDate: '2024-12-31',
-    status: 'expired',
-    thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
-    description: 'Annual property tax assessment'
-  },
-  {
-    id: '5',
-    name: 'Rental Income Statement',
-    category: 'financial',
-    propertyName: 'Garden View Apartment',
-    type: 'excel',
-    size: '1.2 MB',
-    uploadDate: '2024-03-01',
-    status: 'active',
-    thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
-    description: 'Monthly rental income tracking spreadsheet'
-  },
-  {
-    id: '6',
-    name: 'Property Photos - Exterior',
-    category: 'other',
-    propertyName: 'Lakeside Cottage',
-    type: 'image',
-    size: '5.4 MB',
-    uploadDate: '2024-02-28',
-    status: 'active',
-    thumbnail: 'https://images.pexels.com/photos/1396122/pexels-photo-1396122.jpeg?auto=compress&cs=tinysrgb&w=400',
-    description: 'High-resolution exterior property photographs'
-  }
+// Mock data removed - using real data from Supabase
+
+// Base category definitions (without counts)
+const baseCategories = [
+  { id: 'lease', name: 'Lease Agreements', icon: FileText, color: 'bg-blue-100 text-blue-700' },
+  { id: 'legal', name: 'Legal Documents', icon: FileText, color: 'bg-purple-100 text-purple-700' },
+  { id: 'financial', name: 'Financial Records', icon: FileSpreadsheet, color: 'bg-green-100 text-green-700' },
+  { id: 'maintenance', name: 'Maintenance', icon: File, color: 'bg-orange-100 text-orange-600' },
+  { id: 'insurance', name: 'Insurance', icon: FileText, color: 'bg-red-100 text-red-600' },
+  { id: 'id_proof', name: 'ID Proof', icon: FileText, color: 'bg-indigo-100 text-indigo-700' },
+  { id: 'other', name: 'Other', icon: Folder, color: 'bg-gray-100 text-gray-600' }
 ];
 
-const mockStats: DocumentStats = {
-  totalDocuments: 24,
-  expiringDocuments: 3,
-  storageUsed: '156.8 MB',
-  categoriesCount: 6
-};
-
-const categories = [
-  { id: 'lease', name: 'Lease Agreements', icon: FileText, count: 8, color: 'bg-blue-100 text-blue-700' },
-  { id: 'legal', name: 'Legal Documents', icon: FileText, count: 5, color: 'bg-purple-100 text-purple-700' },
-  { id: 'financial', name: 'Financial Records', icon: FileSpreadsheet, count: 6, color: 'bg-green-100 text-green-700' },
-  { id: 'maintenance', name: 'Maintenance', icon: File, count: 3, color: 'bg-orange-100 text-orange-600' },
-  { id: 'insurance', name: 'Insurance', icon: FileText, count: 2, color: 'bg-red-100 text-red-600' },
-  { id: 'other', name: 'Other', icon: Folder, count: 4, color: 'bg-gray-100 text-gray-600' }
+const docTypes = [
+  { id: 'lease', name: 'Lease Agreement' },
+  { id: 'legal', name: 'Legal Document' },
+  { id: 'financial', name: 'Financial Record' },
+  { id: 'maintenance', name: 'Maintenance Record' },
+  { id: 'insurance', name: 'Insurance Document' },
+  { id: 'id_proof', name: 'ID Proof' },
+  { id: 'other', name: 'Other' }
 ];
 
 export const DocumentVault: React.FC = () => {
-  const [documents, setDocuments] = useState<Document[]>(mockDocuments);
+  const [documents, setDocuments] = useState<Document[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [filterCategory, setFilterCategory] = useState<string>('all');
@@ -154,6 +76,13 @@ export const DocumentVault: React.FC = () => {
   const [sortBy, setSortBy] = useState<string>('date');
   const [showFilters, setShowFilters] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [properties, setProperties] = useState<{id: string, name: string}[]>([]);
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string>('');
+  const [selectedDocType, setSelectedDocType] = useState<string>('other');
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -163,16 +92,225 @@ export const DocumentVault: React.FC = () => {
     navigate('/auth/login');
   };
 
+  // Fetch documents and properties from Supabase
+  useEffect(() => {
+    const fetchData = async () => {
+      console.log('DocumentVault: fetchData called, user:', user?.id);
+      if (!user?.id) {
+        console.log('No user ID, setting loading to false');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        console.log('Starting data fetch...');
+        setLoading(true);
+        
+        // Fetch documents
+        console.log('Fetching user documents...');
+        const documentsData = await fetchUserDocuments();
+        console.log('Fetched documents:', documentsData);
+        
+        // Fetch properties for property names
+        console.log('Fetching properties...');
+        const { data: propertiesData, error: propertiesError } = await supabase
+          .from('properties')
+          .select('id, name')
+          .eq('owner_id', user.id)
+          .eq('active', 'Y');
+
+        if (propertiesError) {
+          console.error('Error fetching properties:', propertiesError);
+        } else {
+          console.log('Fetched properties:', propertiesData);
+        }
+
+        const propertiesMap = new Map((propertiesData || []).map(p => [p.id, p.name]));
+        console.log('Properties map:', propertiesMap);
+        
+        // Transform documents data
+        const transformedDocuments: Document[] = documentsData.map(doc => ({
+          id: doc.id,
+          name: doc.name,
+          doc_type: doc.doc_type,
+          propertyName: doc.property_id ? (propertiesMap.get(doc.property_id) || 'Unknown Property') : 'General',
+          type: doc.doc_type || 'Unknown',
+          size: 'Unknown', // Size not stored in actual table
+          uploadDate: doc.uploaded_at || '',
+          url: doc.url,
+          thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400'
+        }));
+
+        console.log('Transformed documents:', transformedDocuments);
+        setDocuments(transformedDocuments);
+        setProperties(propertiesData || []);
+        
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      } finally {
+        console.log('Data fetch completed, setting loading to false');
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user?.id]);
+
+  // File upload handlers
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('File upload triggered:', e.target.files);
+    const files = Array.from(e.target.files || []);
+    console.log('Files selected:', files);
+    setUploadFiles(prev => [...prev, ...files]);
+  };
+
+  const removeFile = (index: number) => {
+    setUploadFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleDeleteDocument = async (documentId: string) => {
+    if (!confirm('Are you sure you want to delete this document? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      await softDeleteDocument(documentId);
+      
+      // Refresh documents list
+      const documentsData = await fetchUserDocuments();
+      const propertiesData = await supabase
+        .from('properties')
+        .select('id, name')
+        .eq('owner_id', user?.id)
+        .eq('active', 'Y');
+
+      if (propertiesData.error) {
+        throw propertiesData.error;
+      }
+
+      const propertiesMap = new Map(propertiesData.data?.map(p => [p.id, p.name]) || []);
+      
+      const formattedDocuments: Document[] = documentsData.map(doc => ({
+        id: doc.id,
+        name: doc.name,
+        doc_type: doc.doc_type,
+        propertyName: propertiesMap.get(doc.property_id || '') || 'Unknown Property',
+        type: doc.doc_type || 'Unknown',
+        size: 'Unknown',
+        uploadDate: doc.uploaded_at || '',
+        url: doc.url || '',
+        thumbnail: '/api/placeholder/150/150'
+      }));
+
+      setDocuments(formattedDocuments);
+      alert('Document deleted successfully!');
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      alert('Failed to delete document. Please try again.');
+    }
+  };
+
+  const handleUpload = async () => {
+    console.log('Upload button clicked, files:', uploadFiles);
+    console.log('Selected property:', selectedPropertyId);
+    console.log('Selected doc type:', selectedDocType);
+    
+    if (uploadFiles.length === 0) {
+      console.log('No files to upload');
+      return;
+    }
+    
+    if (!selectedPropertyId) {
+      alert('Please select a property for the documents');
+      return;
+    }
+    
+    console.log('Starting upload process...');
+    setUploading(true);
+    
+    try {
+      console.log('Creating upload promises for', uploadFiles.length, 'files');
+      const uploadPromises = uploadFiles.map(async (file, index) => {
+        console.log(`Uploading file ${index + 1}:`, file.name);
+        return await uploadDocument(
+          file,
+          selectedPropertyId, // propertyId
+          undefined, // leaseId
+          undefined, // tenantId
+          selectedDocType // docType
+        );
+      });
+      
+      console.log('Waiting for all uploads to complete...');
+      await Promise.all(uploadPromises);
+      console.log('All uploads completed successfully');
+      
+      // Refresh documents
+      console.log('Refreshing documents list...');
+      const documentsData = await fetchUserDocuments();
+      console.log('Fetched documents:', documentsData);
+      
+      const { data: propertiesData } = await supabase
+        .from('properties')
+        .select('id, name')
+        .eq('owner_id', user?.id)
+        .eq('active', 'Y');
+
+      const propertiesMap = new Map((propertiesData || []).map(p => [p.id, p.name]));
+      
+      const transformedDocuments: Document[] = documentsData.map(doc => ({
+        id: doc.id,
+        name: doc.name,
+        doc_type: doc.doc_type,
+        propertyName: doc.property_id ? (propertiesMap.get(doc.property_id) || 'Unknown Property') : 'General',
+        type: doc.doc_type || 'Unknown',
+        size: 'Unknown',
+        uploadDate: doc.uploaded_at || '',
+        url: doc.url,
+        thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400'
+      }));
+
+      console.log('Setting documents state:', transformedDocuments);
+      setDocuments(transformedDocuments);
+      setUploadFiles([]);
+      setShowUploadModal(false);
+      alert(`${uploadFiles.length} document(s) uploaded successfully!`);
+      
+    } catch (error) {
+      console.error('Error uploading documents:', error);
+      alert('Failed to upload documents. Please try again.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const filteredDocuments = documents.filter(doc => {
     const matchesSearch = doc.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         doc.propertyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         doc.description?.toLowerCase().includes(searchTerm.toLowerCase());
+                         doc.propertyName.toLowerCase().includes(searchTerm.toLowerCase());
     
-    const matchesCategory = filterCategory === 'all' || doc.category === filterCategory;
-    const matchesStatus = filterStatus === 'all' || doc.status === filterStatus;
+    const matchesCategory = filterCategory === 'all' || doc.doc_type === filterCategory;
     
-    return matchesSearch && matchesCategory && matchesStatus;
+    return matchesSearch && matchesCategory;
   });
+
+  // Calculate real stats from documents
+  const stats = {
+    totalDocuments: documents.length,
+    expiringDocuments: 0, // We don't have expiry dates in the current schema
+    storageUsed: 'Unknown', // Size not stored in current schema
+    categoriesCount: new Set(documents.map(doc => doc.doc_type)).size
+  };
+
+  // Calculate actual category counts from documents
+  const getCategoryCount = (categoryId: string) => {
+    return documents.filter(doc => doc.doc_type === categoryId).length;
+  };
+
+  // Create categories with real counts
+  const categories = baseCategories.map(category => ({
+    ...category,
+    count: getCategoryCount(category.id)
+  }));
 
   const sortedDocuments = [...filteredDocuments].sort((a, b) => {
     switch (sortBy) {
@@ -186,20 +324,18 @@ export const DocumentVault: React.FC = () => {
     }
   });
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active': return 'text-green-700 bg-green-100';
-      case 'expiring': return 'text-orange-600 bg-orange-100';
-      case 'expired': return 'text-red-600 bg-red-100';
-      default: return 'text-gray-600 bg-gray-100';
-    }
-  };
 
   const getFileIcon = (type: string) => {
     switch (type) {
       case 'pdf': return <FileText className="w-6 h-6 text-red-600" />;
       case 'excel': return <FileSpreadsheet className="w-6 h-6 text-green-600" />;
       case 'image': return <Image className="w-6 h-6 text-blue-600" />;
+      case 'lease': return <FileText className="w-6 h-6 text-blue-600" />;
+      case 'legal': return <FileText className="w-6 h-6 text-purple-600" />;
+      case 'financial': return <FileSpreadsheet className="w-6 h-6 text-green-600" />;
+      case 'maintenance': return <File className="w-6 h-6 text-orange-600" />;
+      case 'insurance': return <FileText className="w-6 h-6 text-red-600" />;
+      case 'id_proof': return <FileText className="w-6 h-6 text-indigo-600" />;
       default: return <File className="w-6 h-6 text-gray-600" />;
     }
   };
@@ -213,22 +349,43 @@ export const DocumentVault: React.FC = () => {
           className="w-full h-full object-cover"
         />
         <div className="absolute top-3 right-3 flex gap-2">
-          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(document.status)}`}>
-            {document.status}
+          <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+            {document.doc_type || 'Document'}
           </span>
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         <div className="absolute bottom-3 left-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
           <div className="flex gap-2">
-            <Link to={`/documents/view/${document.id}`} className="flex-1">
-              <Button size="sm" className="w-full text-xs">
-                <Eye size={12} className="mr-1" />
-                View
-              </Button>
-            </Link>
-            <Button size="sm" variant="outline" className="flex-1 text-xs">
+            <Button 
+              size="sm" 
+              className="flex-1 text-xs"
+              onClick={() => window.open(document.url, '_blank')}
+            >
+              <Eye size={12} className="mr-1" />
+              View
+            </Button>
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="flex-1 text-xs"
+              onClick={() => {
+                const link = window.document.createElement('a');
+                link.href = document.url;
+                link.download = document.name;
+                link.click();
+              }}
+            >
               <Download size={12} className="mr-1" />
               Download
+            </Button>
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="text-xs text-red-600 hover:text-red-700 hover:bg-red-100"
+              onClick={() => handleDeleteDocument(document.id)}
+              title="Delete document"
+            >
+              <Trash2 size={12} />
             </Button>
           </div>
         </div>
@@ -236,36 +393,33 @@ export const DocumentVault: React.FC = () => {
       
       <div className="p-4">
         <div className="flex items-start gap-3 mb-3">
-          {getFileIcon(document.type)}
+          {getFileIcon(document.doc_type || document.type)}
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-glass truncate">{document.name}</h3>
-            <p className="text-sm text-glass-muted">{document.propertyName}</p>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">
+                {document.doc_type || 'Document'}
+              </span>
+              <span className="text-xs text-glass-muted">•</span>
+              <span className="text-xs text-glass-muted">{document.propertyName}</span>
+            </div>
           </div>
         </div>
         
         <div className="flex items-center justify-between mb-3">
           <span className="text-xs text-glass-muted">{document.size}</span>
           <span className="text-xs text-glass-muted">
-            {new Date(document.uploadDate).toLocaleDateString()}
+            {getRelativeTime(document.uploadDate)}
           </span>
         </div>
 
-        {document.expiryDate && (
-          <div className="mb-3 p-2 glass rounded-lg">
-            <div className="flex items-center gap-2">
-              <Calendar size={14} className="text-glass-muted" />
-              <span className="text-xs text-glass-muted">
-                Expires: {new Date(document.expiryDate).toLocaleDateString()}
-              </span>
-            </div>
-          </div>
-        )}
-
-        <Link to={`/documents/view/${document.id}`}>
-          <Button variant="outline" className="w-full">
-            View Details
-          </Button>
-        </Link>
+        <Button 
+          variant="outline" 
+          className="w-full"
+          onClick={() => window.open(document.url, '_blank')}
+        >
+          View Document
+        </Button>
       </div>
     </div>
   );
@@ -274,18 +428,21 @@ export const DocumentVault: React.FC = () => {
     <div className="glass-card rounded-xl p-4 hover:scale-[1.02] transition-all duration-300 glow">
       <div className="flex items-center gap-4">
         <div className="w-16 h-16 glass rounded-lg flex items-center justify-center">
-          {getFileIcon(document.type)}
+          {getFileIcon(document.doc_type || document.type)}
         </div>
         
         <div className="flex-1">
           <div className="flex items-start justify-between mb-2">
-            <div>
+            <div className="flex-1">
               <h3 className="font-semibold text-glass">{document.name}</h3>
-              <p className="text-sm text-glass-muted">{document.propertyName}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                  {document.doc_type || 'Document'}
+                </span>
+                <span className="text-xs text-glass-muted">•</span>
+                <span className="text-sm text-glass-muted">{document.propertyName}</span>
+              </div>
             </div>
-            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(document.status)}`}>
-              {document.status}
-            </span>
           </div>
           
           <div className="flex items-center justify-between">
@@ -293,27 +450,40 @@ export const DocumentVault: React.FC = () => {
               <div>
                 <p className="text-sm text-glass-muted">Size: {document.size}</p>
                 <p className="text-xs text-glass-muted">
-                  Uploaded: {new Date(document.uploadDate).toLocaleDateString()}
+                  Uploaded: {getRelativeTime(document.uploadDate)}
                 </p>
               </div>
-              {document.expiryDate && (
-                <div>
-                  <p className="text-sm text-glass-muted">
-                    Expires: {new Date(document.expiryDate).toLocaleDateString()}
-                  </p>
-                </div>
-              )}
             </div>
             
             <div className="flex gap-2">
-              <Link to={`/documents/view/${document.id}`}>
-                <Button size="sm" variant="outline">
-                  <Eye size={14} className="mr-1" />
-                  View
-                </Button>
-              </Link>
-              <Button size="sm" variant="outline">
+              <Button 
+                size="sm" 
+                variant="outline"
+                onClick={() => window.open(document.url, '_blank')}
+              >
+                <Eye size={14} className="mr-1" />
+                View
+              </Button>
+              <Button 
+                size="sm" 
+                variant="outline"
+                onClick={() => {
+                  const link = window.document.createElement('a');
+                  link.href = document.url;
+                  link.download = document.name;
+                  link.click();
+                }}
+              >
                 <Download size={14} />
+              </Button>
+              <Button 
+                size="sm" 
+                variant="outline"
+                className="text-red-600 hover:text-red-700 hover:bg-red-100"
+                onClick={() => handleDeleteDocument(document.id)}
+                title="Delete document"
+              >
+                <Trash2 size={14} />
               </Button>
             </div>
           </div>
@@ -404,16 +574,32 @@ export const DocumentVault: React.FC = () => {
             <h1 className="text-3xl font-bold text-glass mb-2">Document Vault</h1>
             <p className="text-glass-muted">Manage all your property documents in one place</p>
           </div>
-          <Link to="/documents/upload">
-            <Button className="flex items-center gap-2">
-              <Plus size={18} />
-              Upload Documents
-            </Button>
-          </Link>
+          <Button 
+            className="flex items-center gap-2"
+            onClick={() => {
+              console.log('Upload Documents button clicked');
+              setShowUploadModal(true);
+            }}
+          >
+            <Plus size={18} />
+            Upload Documents
+          </Button>
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        {loading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="glass-card rounded-xl p-6 glow animate-pulse">
+                <div className="w-12 h-12 glass rounded-lg mb-4"></div>
+                <div className="h-4 bg-white bg-opacity-20 rounded mb-2"></div>
+                <div className="h-8 bg-white bg-opacity-20 rounded mb-2"></div>
+                <div className="h-3 bg-white bg-opacity-20 rounded"></div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
           <div className="glass-card rounded-xl p-6 glow">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
@@ -421,7 +607,7 @@ export const DocumentVault: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Total Documents</h3>
-            <p className="text-3xl font-bold text-glass">{mockStats.totalDocuments}</p>
+            <p className="text-3xl font-bold text-glass">{stats.totalDocuments}</p>
             <p className="text-sm text-green-700 mt-2">All files</p>
           </div>
 
@@ -432,7 +618,7 @@ export const DocumentVault: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Expiring Soon</h3>
-            <p className="text-3xl font-bold text-orange-600">{mockStats.expiringDocuments}</p>
+            <p className="text-3xl font-bold text-orange-600">{stats.expiringDocuments}</p>
             <p className="text-sm text-orange-600 mt-2">Need attention</p>
           </div>
 
@@ -443,7 +629,7 @@ export const DocumentVault: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Storage Used</h3>
-            <p className="text-3xl font-bold text-glass">{mockStats.storageUsed}</p>
+            <p className="text-3xl font-bold text-glass">{stats.storageUsed}</p>
             <p className="text-sm text-green-700 mt-2">of 1 GB</p>
           </div>
 
@@ -454,26 +640,27 @@ export const DocumentVault: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Categories</h3>
-            <p className="text-3xl font-bold text-glass">{mockStats.categoriesCount}</p>
+            <p className="text-3xl font-bold text-glass">{stats.categoriesCount}</p>
             <p className="text-sm text-green-700 mt-2">Organized</p>
           </div>
         </div>
+        )}
 
         {/* Categories Grid */}
         <div className="glass-card rounded-xl p-6 mb-8">
           <h2 className="text-xl font-semibold text-glass mb-4">Categories</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="grid grid-cols-7 gap-2">
             {categories.map((category) => (
               <button
                 key={category.id}
                 onClick={() => setFilterCategory(category.id)}
-                className="glass rounded-lg p-4 hover:scale-105 transition-all duration-300 text-center group"
+                className="glass rounded-lg p-2 hover:scale-105 transition-all duration-300 text-center group"
               >
-                <div className={`w-12 h-12 rounded-lg flex items-center justify-center mx-auto mb-2 ${category.color}`}>
-                  <category.icon size={24} />
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center mx-auto mb-1 ${category.color}`}>
+                  <category.icon size={16} />
                 </div>
-                <h3 className="font-medium text-glass text-sm mb-1">{category.name}</h3>
-                <p className="text-xs text-glass-muted">{category.count} files</p>
+                <h3 className="font-medium text-glass text-xs mb-1">{category.name}</h3>
+                <p className="text-xs text-glass-muted">{category.count}</p>
               </button>
             ))}
           </div>
@@ -625,12 +812,178 @@ export const DocumentVault: React.FC = () => {
                 : 'Get started by uploading your first document'
               }
             </p>
-            <Link to="/documents/upload">
-              <Button>Upload Documents</Button>
-            </Link>
+            <Button onClick={() => {
+              console.log('Empty state Upload Documents button clicked');
+              setShowUploadModal(true);
+            }}>
+              Upload Documents
+            </Button>
           </div>
         )}
       </main>
+
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="glass-card rounded-xl max-w-2xl w-full">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 glass rounded-lg flex items-center justify-center">
+                    <Upload className="w-5 h-5 text-green-800" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-glass">Upload Documents</h2>
+                </div>
+                <button
+                  onClick={() => {
+                    console.log('Modal close button clicked');
+                    setShowUploadModal(false);
+                    setUploadFiles([]);
+                    setSelectedPropertyId('');
+                    setSelectedDocType('other');
+                  }}
+                  className="p-2 hover:bg-white hover:bg-opacity-20 rounded-lg transition-colors"
+                >
+                  <X size={20} className="text-glass-muted" />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                {/* Property Selection */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-glass">Select Property</label>
+                  <select
+                    value={selectedPropertyId}
+                    onChange={(e) => {
+                      console.log('Property selected:', e.target.value);
+                      setSelectedPropertyId(e.target.value);
+                    }}
+                    className="w-full p-3 glass rounded-lg border border-white border-opacity-20 focus:border-green-800 focus:outline-none text-glass"
+                  >
+                    <option value="">Choose a property...</option>
+                    {properties.map((property) => (
+                      <option key={property.id} value={property.id}>
+                        {property.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Document Type Selection */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-glass">Document Type</label>
+                  <select
+                    value={selectedDocType}
+                    onChange={(e) => {
+                      console.log('Document type selected:', e.target.value);
+                      setSelectedDocType(e.target.value);
+                    }}
+                    className="w-full p-3 glass rounded-lg border border-white border-opacity-20 focus:border-green-800 focus:outline-none text-glass"
+                  >
+                    {docTypes.map((type) => (
+                      <option key={type.id} value={type.id}>
+                        {type.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div 
+                  className="border-2 border-dashed border-white border-opacity-30 rounded-lg p-6 text-center hover:border-green-800 transition-colors cursor-pointer"
+                >
+                  <Upload size={32} className="mx-auto text-glass-muted mb-4" />
+                  <p className="text-glass-muted mb-4">
+                    Drag and drop files here, or click to browse
+                  </p>
+                  <input
+                    type="file"
+                    multiple
+                    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xlsx,.xls"
+                    onChange={(e) => {
+                      console.log('File input onChange triggered:', e.target.files);
+                      handleFileUpload(e);
+                    }}
+                    className="hidden"
+                    id="document-upload"
+                  />
+                  <label htmlFor="document-upload">
+                    <Button 
+                      variant="outline" 
+                      className="cursor-pointer" 
+                      type="button"
+                      onClick={() => {
+                        console.log('Choose Files button clicked');
+                        // Trigger the file input
+                        const fileInput = document.getElementById('document-upload') as HTMLInputElement;
+                        if (fileInput) {
+                          console.log('Triggering file input click');
+                          fileInput.click();
+                        } else {
+                          console.error('File input not found');
+                        }
+                      }}
+                    >
+                      Choose Files
+                    </Button>
+                  </label>
+                </div>
+
+                {uploadFiles.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-glass">Selected Files ({uploadFiles.length})</h3>
+                    {uploadFiles.map((file, index) => (
+                      <div key={index} className="flex items-center justify-between p-3 glass rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <FileText size={20} className="text-glass-muted" />
+                          <div>
+                            <p className="font-medium text-glass">{file.name}</p>
+                            <p className="text-sm text-glass-muted">
+                              {(file.size / 1024 / 1024).toFixed(2)} MB
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => removeFile(index)}
+                          className="p-1 hover:bg-red-100 hover:bg-opacity-20 rounded transition-colors"
+                        >
+                          <X size={16} className="text-red-600" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex gap-4">
+                  <Button
+                    onClick={() => {
+                      console.log('Cancel button clicked');
+                      setShowUploadModal(false);
+                      setUploadFiles([]);
+                      setSelectedPropertyId('');
+                      setSelectedDocType('other');
+                    }}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      console.log('Upload Documents button clicked in modal');
+                      handleUpload();
+                    }}
+                    loading={uploading}
+                    disabled={uploadFiles.length === 0 || uploading || !selectedPropertyId}
+                    className="flex-1"
+                  >
+                    {uploading ? 'Uploading...' : 'Upload Documents'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

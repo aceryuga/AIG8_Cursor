@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
+import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
+import { getRelativeTime } from '../../utils/timezoneUtils';
 import { Link } from 'react-router-dom';
 import { 
   Building2, 
@@ -28,17 +30,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 
-interface Property {
-  id: string;
-  name: string;
-  address: string;
-  rent: number;
-  tenant: string;
-  status: 'occupied' | 'vacant' | 'maintenance';
-  paymentStatus: 'paid' | 'pending' | 'overdue';
-  image: string;
-  dueDate: string;
-}
+// Property interface removed as it's not used in this component
 
 interface SupabaseProperty {
   id: string;
@@ -66,86 +58,13 @@ interface Activity {
   type: 'payment' | 'lease' | 'maintenance' | 'document';
   message: string;
   time: string;
+  timestamp: number; // Add timestamp for proper sorting
   status: 'success' | 'warning' | 'info';
 }
 
-const mockProperties: Property[] = [
-  {
-    id: '1',
-    name: 'Green Valley Apartment',
-    address: 'Sector 18, Noida',
-    rent: 15000,
-    tenant: 'Amit Sharma',
-    status: 'occupied',
-    paymentStatus: 'paid',
-    image: 'https://images.pexels.com/photos/1396122/pexels-photo-1396122.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '2025-01-05'
-  },
-  {
-    id: '2',
-    name: 'Sunrise Villa',
-    address: 'Gurgaon, Haryana',
-    rent: 25000,
-    tenant: 'Priya Patel',
-    status: 'occupied',
-    paymentStatus: 'pending',
-    image: 'https://images.pexels.com/photos/1396132/pexels-photo-1396132.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '2025-01-10'
-  },
-  {
-    id: '3',
-    name: 'City Center Office',
-    address: 'Connaught Place, Delhi',
-    rent: 35000,
-    tenant: 'Tech Solutions Ltd',
-    status: 'occupied',
-    paymentStatus: 'overdue',
-    image: 'https://images.pexels.com/photos/2102587/pexels-photo-2102587.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '2024-12-25'
-  },
-  {
-    id: '4',
-    name: 'Lakeside Cottage',
-    address: 'Manesar, Gurgaon',
-    rent: 18000,
-    tenant: '',
-    status: 'vacant',
-    paymentStatus: 'pending',
-    image: 'https://images.pexels.com/photos/1396196/pexels-photo-1396196.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: ''
-  }
-];
 
-const mockActivities: Activity[] = [
-  {
-    id: '1',
-    type: 'payment',
-    message: 'Rent payment received from Amit Sharma - ₹15,000',
-    time: '2 hours ago',
-    status: 'success'
-  },
-  {
-    id: '2',
-    type: 'lease',
-    message: 'Lease expiry reminder: Priya Patel (30 days)',
-    time: '1 day ago',
-    status: 'warning'
-  },
-  {
-    id: '3',
-    type: 'payment',
-    message: 'Payment overdue: Tech Solutions Ltd - ₹35,000',
-    time: '3 days ago',
-    status: 'warning'
-  },
-  {
-    id: '4',
-    type: 'document',
-    message: 'New lease agreement uploaded for Green Valley Apartment',
-    time: '1 week ago',
-    status: 'info'
-  }
-];
+
+
 
 export const Dashboard: React.FC = () => {
   const { user, logout } = useAuth();
@@ -158,6 +77,8 @@ export const Dashboard: React.FC = () => {
   
   // Supabase data states
   const [supabaseProperties, setSupabaseProperties] = useState<SupabaseProperty[]>([]);
+  const [payments, setPayments] = useState<any[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
 
@@ -195,18 +116,21 @@ export const Dashboard: React.FC = () => {
         setDataLoading(true);
         setDataError(null);
 
-        // Fetch properties with their leases and tenants
+        // Fetch properties with their leases and tenants (only active properties)
         const { data: properties, error: propError } = await supabase
           .from('properties')
           .select(`
             *,
             leases(
+              id,
               monthly_rent,
               security_deposit,
               maintenance_charges,
               start_date,
               end_date,
               is_active,
+              created_at,
+              updated_at,
               tenants(
                 name,
                 phone,
@@ -214,13 +138,191 @@ export const Dashboard: React.FC = () => {
               )
             )
           `)
-          .eq('owner_id', user.id);
+          .eq('owner_id', user.id)
+          .eq('active', 'Y');
 
         if (propError) {
           throw propError;
         }
 
         setSupabaseProperties(properties || []);
+
+        // Fetch recent payments for payment status calculation
+        const { data: paymentsData, error: paymentsError } = await supabase
+          .from('payments')
+          .select(`
+            *,
+            leases!inner(
+              id,
+              property_id,
+              is_active,
+              properties(
+                id,
+                name
+              ),
+              tenants(
+                name
+              )
+            )
+          `)
+          .in('leases.property_id', properties?.map(p => p.id) || [])
+          .eq('leases.is_active', true)
+          .order('created_at', { ascending: false }); // Order by created_at for accurate activity timeline
+
+        // Fetch recently deleted properties for audit trail
+        const { data: deletedProperties, error: deletedError } = await supabase
+          .from('properties')
+          .select(`
+            id,
+            name,
+            updated_at
+          `)
+          .eq('owner_id', user.id)
+          .eq('active', 'N')
+          .order('updated_at', { ascending: false })
+          .limit(5);
+
+        if (deletedError) {
+          console.warn('Error fetching deleted properties:', deletedError);
+        }
+
+        if (paymentsError) {
+          console.warn('Error fetching payments:', paymentsError);
+        } else {
+          setPayments(paymentsData || []);
+        }
+
+        // Generate activities from recent payments and properties
+        const recentActivities: Activity[] = [];
+        
+        // Add recent payments as activities
+        if (paymentsData && paymentsData.length > 0) {
+          paymentsData.slice(0, 5).forEach((payment) => {
+            const tenant = (payment.leases as any)?.tenants?.name || 'Unknown Tenant';
+            
+            // Use created_at timestamp for accurate activity time
+            const activityTime = payment.created_at || payment.updated_at || payment.payment_date;
+            
+            // Debug logging (can be removed in production)
+            // console.log('Payment activity data:', {
+            //   paymentId: payment.id,
+            //   created_at: payment.created_at,
+            //   activityTime,
+            //   timeAgo: getRelativeTime(activityTime),
+            //   tenantName: tenant
+            // });
+            
+            recentActivities.push({
+              id: `payment-${payment.id}`,
+              type: 'payment',
+              message: `Rent payment received from ${tenant} - ₹${payment.payment_amount.toLocaleString()}`,
+              time: getRelativeTime(activityTime),
+              timestamp: new Date(activityTime).getTime(),
+              status: payment.status === 'completed' ? 'success' : 'warning'
+            });
+          });
+        }
+
+        // Add property creation activities
+        if (properties && properties.length > 0) {
+          properties.slice(0, 3).forEach(prop => {
+            if (prop.created_at) {
+              recentActivities.push({
+                id: `property-${prop.id}`,
+                type: 'document',
+                message: `Property "${prop.name}" was added`,
+                time: getRelativeTime(prop.created_at),
+                timestamp: new Date(prop.created_at).getTime(),
+                status: 'info'
+              });
+            }
+          });
+        }
+
+        // Add property deletion activities
+        if (deletedProperties && deletedProperties.length > 0) {
+          deletedProperties.forEach(prop => {
+            if (prop.updated_at) {
+              // Debug logging (can be removed in production)
+              // console.log('Property deletion debug:', {
+              //   propertyName: prop.name,
+              //   updated_at: prop.updated_at,
+              //   timeAgo: getRelativeTime(prop.updated_at)
+              // });
+              
+              recentActivities.push({
+                id: `property-deleted-${prop.id}`,
+                type: 'document',
+                message: `Property "${prop.name}" was deleted`,
+                time: getRelativeTime(prop.updated_at),
+                timestamp: new Date(prop.updated_at).getTime(),
+                status: 'warning'
+              });
+            }
+          });
+        }
+
+        // Add lease activities
+        if (properties && properties.length > 0) {
+          properties.forEach(prop => {
+            const activeLease = prop.leases?.find((lease: any) => lease.is_active);
+            if (activeLease) {
+              // Add lease creation activity
+              if (activeLease.created_at) {
+                const tenant = activeLease.tenants?.name || 'Unknown Tenant';
+                recentActivities.push({
+                  id: `lease-created-${activeLease.id}`,
+                  type: 'lease',
+                  message: `Lease started for ${tenant} at "${prop.name}"`,
+                  time: getRelativeTime(activeLease.created_at),
+                  timestamp: new Date(activeLease.created_at).getTime(),
+                  status: 'success'
+                });
+              }
+
+              // Add lease expiry reminders
+              if (activeLease.end_date) {
+                const endDate = new Date(activeLease.end_date);
+                const daysUntilExpiry = Math.ceil((endDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                
+                if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
+                  const tenant = activeLease.tenants?.name || 'Unknown Tenant';
+                  recentActivities.push({
+                    id: `lease-expiry-${prop.id}`,
+                    type: 'lease',
+                    message: `Lease expiry reminder: ${tenant} (${daysUntilExpiry} days)`,
+                    time: 'Today',
+                    timestamp: new Date().getTime(),
+                    status: daysUntilExpiry <= 7 ? 'warning' : 'info'
+                  });
+                }
+              }
+            }
+
+            // Add lease termination activities (for recently ended leases)
+            const endedLeases = prop.leases?.filter((lease: any) => !lease.is_active && lease.updated_at);
+            if (endedLeases && endedLeases.length > 0) {
+              endedLeases.slice(0, 2).forEach((lease: any) => {
+                const tenant = lease.tenants?.name || 'Unknown Tenant';
+                recentActivities.push({
+                  id: `lease-ended-${lease.id}`,
+                  type: 'lease',
+                  message: `Lease ended for ${tenant} at "${prop.name}"`,
+                  time: getRelativeTime(lease.updated_at),
+                  timestamp: new Date(lease.updated_at).getTime(),
+                  status: 'warning'
+                });
+              });
+            }
+          });
+        }
+
+        // Sort activities by timestamp (most recent first) and limit to 10
+        recentActivities.sort((a, b) => {
+          return b.timestamp - a.timestamp;
+        });
+
+        setActivities(recentActivities.slice(0, 10));
       } catch (error: any) {
         console.error('Error fetching dashboard data:', error);
         setDataError(error.message || 'Failed to load dashboard data');
@@ -237,21 +339,48 @@ export const Dashboard: React.FC = () => {
     window.location.href = '/auth/login';
   };
 
-  // Use real data from Supabase, fallback to mock data if loading
-  const properties = dataLoading ? mockProperties : supabaseProperties.map(prop => {
-    // Get active lease and tenant data
-    const activeLease = prop.leases && prop.leases.length > 0 ? 
-      prop.leases.find(lease => lease.is_active) || prop.leases[0] : null;
-    const tenant = activeLease?.tenants || null;
+  // Helper function to determine payment status using new rent calculation system
+  const getPaymentStatus = (propertyId: string, activeLease: any) => {
+    if (!activeLease) return 'pending';
     
+    // Convert to the format expected by calculateRentStatus
+    const propertyWithLease: PropertyWithLease = {
+      id: propertyId,
+      lease_id: (activeLease as any).id,
+      monthly_rent: activeLease.monthly_rent,
+      start_date: activeLease.start_date,
+      is_active: activeLease.is_active
+    };
+    
+    // Convert payments to the format expected by calculateRentStatus
+    const rentPayments: RentPayment[] = payments.map(payment => ({
+      id: payment.id,
+      lease_id: (payment.leases as any)?.id || '',
+      payment_date: payment.payment_date,
+      payment_amount: payment.payment_amount,
+      status: payment.status as 'completed' | 'pending' | 'failed'
+    }));
+    
+    // Calculate rent status
+    const rentStatus = calculateRentStatus(propertyWithLease, rentPayments);
+    
+    return rentStatus.status;
+  };
+
+  // Use real data from Supabase only (no mock fallback)
+  const properties = supabaseProperties.map(prop => {
+    const activeLease = prop.leases && prop.leases.length > 0 ?
+      (prop.leases.find(lease => lease.is_active) || null) : null;
+    const tenant = activeLease?.tenants || null;
+
     return {
       id: prop.id,
       name: prop.name || 'Unnamed Property',
       address: prop.address || 'Address not available',
       rent: activeLease?.monthly_rent || 0,
       tenant: tenant?.name || 'Vacant',
-      status: prop.status as 'occupied' | 'vacant' | 'maintenance',
-      paymentStatus: 'pending' as const, // Will be populated when we add payment data
+      status: (prop.status as 'occupied' | 'vacant' | 'maintenance') || 'vacant',
+      paymentStatus: getPaymentStatus(prop.id, activeLease) as 'paid' | 'pending' | 'overdue',
       image: prop.images ? (() => {
         try {
           const parsed = JSON.parse(prop.images);
@@ -260,16 +389,63 @@ export const Dashboard: React.FC = () => {
           return '/placeholder-property.jpg';
         }
       })() : '/placeholder-property.jpg',
-      dueDate: activeLease?.end_date || 'No lease'
+      dueDate: activeLease?.end_date || 'No lease',
+      leases: prop.leases // Keep leases data for overdue calculation
     };
   });
 
+
   const totalProperties = properties.length;
-  const monthlyRent = properties.reduce((sum, prop) => sum + prop.rent, 0);
+  const monthlyRent = supabaseProperties.reduce((sum, prop) => {
+    const activeLease = prop.leases?.find(lease => lease.is_active);
+    return sum + (activeLease?.monthly_rent || 0);
+  }, 0);
+  
+  // Calculate overdue and pending amounts using new rent calculation system
+  const propertiesWithLeases: PropertyWithLease[] = supabaseProperties.map(prop => {
+    const activeLease = prop.leases?.find(lease => lease.is_active);
+    if (!activeLease) return null;
+    
+    return {
+      id: prop.id,
+      lease_id: (activeLease as any).id,
+      monthly_rent: activeLease.monthly_rent,
+      start_date: activeLease.start_date,
+      is_active: activeLease.is_active
+    };
+  }).filter(Boolean) as PropertyWithLease[];
+
+  const rentPayments: RentPayment[] = payments.map(payment => ({
+    id: payment.id,
+    lease_id: (payment.leases as any)?.id || '',
+    payment_date: payment.payment_date,
+    payment_amount: payment.payment_amount,
+    status: payment.status as 'completed' | 'pending' | 'failed'
+  }));
+
+
+  // Calculate amounts for overdue and pending properties
+  const overdueProperties = propertiesWithLeases.filter(prop => {
+    const rentStatus = calculateRentStatus(prop, rentPayments);
+    return rentStatus.status === 'overdue';
+  });
+
+  const pendingProperties = propertiesWithLeases.filter(prop => {
+    const rentStatus = calculateRentStatus(prop, rentPayments);
+    return rentStatus.status === 'pending';
+  });
+
+  const pendingAmount = pendingProperties.reduce((sum, prop) => {
+    const rentStatus = calculateRentStatus(prop, rentPayments);
+    return sum + rentStatus.amount;
+  }, 0);
+
+  const overdueAmount = overdueProperties.reduce((sum, prop) => {
+    const rentStatus = calculateRentStatus(prop, rentPayments);
+    return sum + rentStatus.amount;
+  }, 0);
+  
   const paidProperties = properties.filter(p => p.paymentStatus === 'paid').length;
-  const pendingAmount = properties
-    .filter(p => p.paymentStatus === 'overdue')
-    .reduce((sum, prop) => sum + prop.rent, 0);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -364,7 +540,7 @@ export const Dashboard: React.FC = () => {
                       </button>
                     </div>
                     <div className="space-y-2">
-                      {mockActivities.slice(0, 3).map((activity) => (
+                      {activities.slice(0, 3).map((activity) => (
                         <div key={activity.id} className="p-2 glass rounded-lg">
                           <p className="text-sm text-glass">{activity.message}</p>
                           <p className="text-xs text-glass-muted mt-1">{activity.time}</p>
@@ -483,7 +659,7 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Portfolio Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
           <div className="glass-card rounded-xl p-6 glow">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
@@ -491,7 +667,7 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Total Properties</h3>
-            <p className="text-3xl font-bold text-glass">{totalProperties}</p>
+            <p className="text-2xl font-bold text-glass">{totalProperties}</p>
             <p className="text-sm text-green-700 mt-2">+1 this month</p>
           </div>
 
@@ -503,7 +679,7 @@ export const Dashboard: React.FC = () => {
               <TrendingUp size={16} className="text-green-700" />
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Monthly Rent</h3>
-            <p className="text-3xl font-bold text-glass">₹{monthlyRent.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-glass">₹{monthlyRent.toLocaleString()}</p>
             <p className="text-sm text-green-700 mt-2">Expected</p>
           </div>
 
@@ -514,7 +690,7 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Collection Status</h3>
-            <p className="text-3xl font-bold text-glass">{paidProperties}/{totalProperties}</p>
+            <p className="text-2xl font-bold text-glass">{paidProperties}/{totalProperties}</p>
             <p className="text-sm text-green-700 mt-2">Properties paid</p>
           </div>
 
@@ -525,8 +701,19 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Pending Amount</h3>
-            <p className="text-3xl font-bold text-red-600">₹{pendingAmount.toLocaleString()}</p>
-            <p className="text-sm text-red-600 mt-2">Overdue</p>
+            <p className="text-2xl font-bold text-orange-600">₹{pendingAmount.toLocaleString()}</p>
+            <p className="text-sm text-orange-600 mt-2">Pending Payment</p>
+          </div>
+
+          <div className="glass-card rounded-xl p-6 glow">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-red-600" />
+              </div>
+            </div>
+            <h3 className="text-sm font-medium text-glass-muted mb-1">Overdue Amount</h3>
+            <p className="text-2xl font-bold text-red-600">₹{overdueAmount.toLocaleString()}</p>
+            <p className="text-sm text-red-600 mt-2">Past Due</p>
           </div>
         </div>
 
@@ -544,53 +731,68 @@ export const Dashboard: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {mockProperties.map((property) => (
-                <div key={property.id} className="glass-card rounded-xl overflow-hidden hover:scale-105 transition-all duration-300 glow">
-                  <div className="relative h-48">
-                    <img
-                      src={property.image}
-                      alt={property.name}
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute top-3 right-3">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
-                        {property.paymentStatus}
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <div className="p-4">
-                    <h3 className="font-semibold text-glass mb-1">{property.name}</h3>
-                    <p className="text-sm text-glass-muted mb-3 flex items-center gap-1">
-                      <MapPin size={14} />
-                      {property.address}
-                    </p>
-                    
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <p className="text-lg font-bold text-glass">₹{property.rent.toLocaleString()}</p>
-                        <p className="text-xs text-glass-muted">per month</p>
-                      </div>
-                      <span className={`text-sm font-medium ${getStatusColor(property.status)}`}>
-                        {property.status}
-                      </span>
-                    </div>
-
-                    {property.tenant && (
-                      <div className="mb-3">
-                        <p className="text-sm text-glass-muted">Tenant</p>
-                        <p className="text-sm font-medium text-glass">{property.tenant}</p>
-                      </div>
-                    )}
-
-                    <Link to={`/properties/${property.id}`}>
-                      <Button variant="outline" className="w-full">
-                        View Details
-                      </Button>
-                    </Link>
-                  </div>
+              {dataLoading ? (
+                <div className="col-span-full text-center py-10">
+                  <p className="text-lg text-glass-muted">Loading properties...</p>
                 </div>
-              ))}
+              ) : dataError ? (
+                <div className="col-span-full text-center py-10 text-red-600">
+                  <p>{dataError}</p>
+                  <p>Please try again later.</p>
+                </div>
+              ) : properties.length === 0 ? (
+                <div className="col-span-full text-center py-10 text-glass-muted">
+                  <p>No active properties found. Add a new one!</p>
+                </div>
+              ) : (
+                properties.map((property) => (
+                  <div key={property.id} className="glass-card rounded-xl overflow-hidden hover:scale-105 transition-all duration-300 glow">
+                    <div className="relative h-48">
+                      <img
+                        src={property.image}
+                        alt={property.name}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute top-3 right-3">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                          {property.paymentStatus}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="p-4">
+                      <h3 className="font-semibold text-glass mb-1">{property.name}</h3>
+                      <p className="text-sm text-glass-muted mb-3 flex items-center gap-1">
+                        <MapPin size={14} />
+                        {property.address}
+                      </p>
+                      
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <p className="text-lg font-bold text-glass">₹{property.rent.toLocaleString()}</p>
+                          <p className="text-xs text-glass-muted">per month</p>
+                        </div>
+                        <span className={`text-sm font-medium ${getStatusColor(property.status)}`}>
+                          {property.status}
+                        </span>
+                      </div>
+
+                      {property.tenant && (
+                        <div className="mb-3">
+                          <p className="text-sm text-glass-muted">Tenant</p>
+                          <p className="text-sm font-medium text-glass">{property.tenant}</p>
+                        </div>
+                      )}
+
+                      <Link to={`/properties/${property.id}`}>
+                        <Button variant="outline" className="w-full">
+                          View Details
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
@@ -621,8 +823,12 @@ export const Dashboard: React.FC = () => {
                   </Button>
                 </Link>
                 
-                <Link to="/documents/upload">
-                  <Button className="w-full justify-start h-10 gap-2" variant="outline">
+                <Link to="/documents">
+                  <Button 
+                    className="w-full justify-start h-10 gap-2" 
+                    variant="outline"
+                    onClick={() => console.log('Dashboard: Upload Document button clicked')}
+                  >
                     <Upload size={16} className="shrink-0" />
                     Upload Document
                   </Button>
@@ -634,7 +840,7 @@ export const Dashboard: React.FC = () => {
             <div className="glass-card rounded-xl p-6">
               <h3 className="text-lg font-semibold text-glass mb-4">Recent Activity</h3>
               <div className="space-y-4">
-                {mockActivities.map((activity) => (
+                {activities.map((activity) => (
                   <div key={activity.id} className="flex items-start gap-3 p-3 glass rounded-lg">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
                       activity.status === 'success' ? 'bg-green-100 text-green-700' :
