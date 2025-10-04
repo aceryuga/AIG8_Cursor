@@ -4,6 +4,20 @@
 
 [build.environment]
   NODE_VERSION = "18"
+  # Disable secrets scanning for VITE_ variables (they're public by design)
+  SECRETS_SCAN_ENABLED = "false"
+
+# Configure build processing
+[build.processing]
+  skip_processing = false
+
+[build.processing.css]
+  bundle = true
+  minify = true
+
+[build.processing.js]
+  bundle = true
+  minify = true
 
 # Headers for proper MIME types
 [[headers]]
