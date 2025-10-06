@@ -242,19 +242,33 @@ export const softDeleteDocument = async (documentId: string): Promise<void> => {
     }
 
     // Extract file path from URL
+    console.log('🔍 Debug - Original document URL:', document.url);
     const url = new URL(document.url);
+    console.log('🔍 Debug - Parsed URL pathname:', url.pathname);
+    
     const filePath = url.pathname.split('/').pop(); // Get the file name
+    console.log('🔍 Debug - Extracted file path (filename only):', filePath);
+    
+    // Try to extract full path (everything after /documents/)
+    const pathParts = url.pathname.split('/documents/');
+    const fullPath = pathParts.length > 1 ? pathParts[1] : null;
+    console.log('🔍 Debug - Extracted full path:', fullPath);
 
-    if (filePath) {
+    if (fullPath) {
+      console.log('🔍 Debug - Attempting to delete from storage with full path:', fullPath);
       // Delete from storage
       const { error: storageError } = await supabase.storage
         .from('documents')
-        .remove([filePath]);
+        .remove([fullPath]);
 
       if (storageError) {
-        console.warn('Error deleting file from storage:', storageError);
+        console.warn('❌ Error deleting file from storage:', storageError);
         // Continue with database update even if storage deletion fails
+      } else {
+        console.log('✅ Successfully deleted file from storage');
       }
+    } else {
+      console.warn('⚠️ No file path extracted, skipping storage deletion');
     }
 
     // Update the document record to mark as deleted (set name to indicate deletion)

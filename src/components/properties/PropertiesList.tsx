@@ -7,6 +7,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
 import { createPropertyAuditEvent, createLeaseAuditEvent } from '../../utils/auditTrail';
+import { ImageWithFallback } from '../ui/ImageWithFallback';
 
 interface Property {
   id: string;
@@ -351,10 +352,11 @@ export const PropertiesList: React.FC = () => {
   const PropertyCard: React.FC<{ property: Property }> = ({ property }) => (
     <div className="glass-card rounded-xl overflow-hidden hover:scale-105 transition-all duration-300 glow group">
       <div className="relative h-48">
-        <img
+        <ImageWithFallback
           src={property.image}
           alt={property.name}
-          className="w-full h-full object-cover"
+          className="w-full h-full"
+          fallbackText="No Image"
         />
         <div className="absolute top-3 right-3 flex gap-2">
           <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
@@ -433,10 +435,11 @@ export const PropertiesList: React.FC = () => {
   const PropertyListItem: React.FC<{ property: Property }> = ({ property }) => (
     <div className="glass-card rounded-xl p-4 hover:scale-[1.02] transition-all duration-300 glow">
       <div className="flex items-center gap-4">
-        <img
+        <ImageWithFallback
           src={property.image}
           alt={property.name}
-          className="w-20 h-20 object-cover rounded-lg"
+          className="w-20 h-20 rounded-lg"
+          fallbackText="No Image"
         />
         
         <div className="flex-1">

@@ -3,6 +3,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
 import { getRelativeTime } from '../../utils/timezoneUtils';
+import { ImageWithFallback } from '../ui/ImageWithFallback';
 import { Link } from 'react-router-dom';
 import { 
   Building2, 
@@ -748,10 +749,11 @@ export const Dashboard: React.FC = () => {
                 properties.map((property) => (
                   <div key={property.id} className="glass-card rounded-xl overflow-hidden hover:scale-105 transition-all duration-300 glow">
                     <div className="relative h-48">
-                      <img
+                      <ImageWithFallback
                         src={property.image}
                         alt={property.name}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full"
+                        fallbackText="No Image"
                       />
                       <div className="absolute top-3 right-3">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>

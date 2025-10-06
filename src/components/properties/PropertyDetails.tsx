@@ -8,6 +8,7 @@ import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
 import { getRelativeTime } from '../../utils/timezoneUtils';
 import { uploadDocument, fetchPropertyDocuments, softDeleteDocument } from '../../utils/documentUpload';
+import { ImageWithFallback } from '../ui/ImageWithFallback';
 
 interface Property {
   id: string;
@@ -752,10 +753,11 @@ export const PropertyDetails: React.FC = () => {
         {/* Property Header */}
         <div className="glass-card rounded-xl p-6 mb-8">
           <div className="flex flex-col lg:flex-row gap-6">
-            <img
+            <ImageWithFallback
               src={currentProperty.image}
               alt={currentProperty.name}
-              className="w-full lg:w-80 h-60 object-cover rounded-lg"
+              className="w-full lg:w-80 h-60 rounded-lg"
+              fallbackText="No Image"
             />
             
             <div className="flex-1">
