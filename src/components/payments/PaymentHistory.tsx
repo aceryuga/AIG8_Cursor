@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   Building2, 
@@ -10,7 +10,6 @@ import {
   Search, 
   Filter, 
   Download, 
-  Calendar, 
   IndianRupee, 
   CheckCircle, 
   Clock, 
@@ -25,6 +24,9 @@ import {
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
+import { calculateRentSummary, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
+import { getRelativeTime } from '../../utils/timezoneUtils';
 
 interface Payment {
   id: string;
@@ -36,6 +38,21 @@ interface Payment {
   reference: string;
   status: 'completed' | 'pending' | 'failed';
   notes?: string;
+  created_at?: string;
+  updated_at?: string;
+  // Database fields
+  payment_amount: number;
+  payment_date: string;
+  payment_method: string;
+  leases?: {
+    property_id: string;
+    properties?: {
+      name: string;
+    };
+    tenants?: {
+      name: string;
+    };
+  };
 }
 
 interface PaymentSummary {
@@ -46,70 +63,17 @@ interface PaymentSummary {
   collectionRate: number;
 }
 
-const mockPayments: Payment[] = [
-  {
-    id: '1',
-    propertyName: 'Green Valley Apartment',
-    tenant: 'Amit Sharma',
-    amount: 15000,
-    date: '2025-01-01',
-    method: 'UPI',
-    reference: 'TXN123456789',
-    status: 'completed'
-  },
-  {
-    id: '2',
-    propertyName: 'Sunrise Villa',
-    tenant: 'Priya Patel',
-    amount: 25000,
-    date: '2025-01-02',
-    method: 'Bank Transfer',
-    reference: 'TXN123456790',
-    status: 'completed'
-  },
-  {
-    id: '3',
-    propertyName: 'City Center Office',
-    tenant: 'Tech Solutions Ltd',
-    amount: 35000,
-    date: '2024-12-28',
-    method: 'Cheque',
-    reference: 'CHQ001234',
-    status: 'pending'
-  },
-  {
-    id: '4',
-    propertyName: 'Metro Plaza Shop',
-    tenant: 'Fashion Hub',
-    amount: 12000,
-    date: '2025-01-03',
-    method: 'Cash',
-    reference: 'CASH001',
-    status: 'completed'
-  },
-  {
-    id: '5',
-    propertyName: 'Garden View Apartment',
-    tenant: 'Rajesh Kumar',
-    amount: 16000,
-    date: '2024-12-25',
-    method: 'UPI',
-    reference: 'TXN123456791',
-    status: 'failed',
-    notes: 'Payment failed due to insufficient funds'
-  }
-];
-
-const mockSummary: PaymentSummary = {
-  totalCollected: 87000,
-  totalPending: 35000,
-  totalOverdue: 16000,
-  paymentsThisMonth: 4,
-  collectionRate: 84.5
-};
 
 export const PaymentHistory: React.FC = () => {
-  const [payments, setPayments] = useState<Payment[]>(mockPayments);
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [summary, setSummary] = useState<PaymentSummary>({
+    totalCollected: 0,
+    totalPending: 0,
+    totalOverdue: 0,
+    paymentsThisMonth: 0,
+    collectionRate: 0
+  });
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterMethod, setFilterMethod] = useState<string>('all');
@@ -126,6 +90,152 @@ export const PaymentHistory: React.FC = () => {
     logout();
     navigate('/auth/login');
   };
+
+  // Fetch payments from Supabase
+  useEffect(() => {
+    if (!user?.id) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchPayments = async () => {
+      try {
+        setLoading(true);
+        
+        // First get user's properties with lease information
+        const { data: properties, error: propError } = await supabase
+          .from('properties')
+          .select(`
+            id,
+            leases!inner(
+              id,
+              monthly_rent,
+              start_date,
+              is_active
+            )
+          `)
+          .eq('owner_id', user.id)
+          .eq('active', 'Y')
+          .eq('leases.is_active', true);
+
+        if (propError) {
+          throw propError;
+        }
+
+        if (!properties || properties.length === 0) {
+          setPayments([]);
+          setSummary({
+            totalCollected: 0,
+            totalPending: 0,
+            totalOverdue: 0,
+            paymentsThisMonth: 0,
+            collectionRate: 0
+          });
+          setLoading(false);
+          return;
+        }
+
+        // Fetch payments with related data
+        const { data: paymentsData, error: paymentsError } = await supabase
+          .from('payments')
+          .select(`
+            *,
+            leases!inner(
+              id,
+              property_id,
+              is_active,
+              properties(
+                id,
+                name
+              ),
+              tenants(
+                name
+              )
+            )
+          `)
+          .in('leases.property_id', properties.map(p => p.id))
+          .eq('leases.is_active', true)
+          .order('payment_date', { ascending: false });
+
+        if (paymentsError) {
+          throw paymentsError;
+        }
+
+        // Transform the data to match our interface
+        const transformedPayments: Payment[] = (paymentsData || []).map(payment => ({
+          id: payment.id,
+          propertyName: payment.leases?.properties?.name || 'Unknown Property',
+          tenant: payment.leases?.tenants?.name || 'Unknown Tenant',
+          amount: payment.payment_amount,
+          date: payment.payment_date,
+          method: payment.payment_method,
+          reference: payment.reference || '',
+          status: payment.status as 'completed' | 'pending' | 'failed',
+          notes: payment.notes || '',
+          created_at: payment.created_at,
+          updated_at: payment.updated_at,
+          // Keep database fields for compatibility
+          payment_amount: payment.payment_amount,
+          payment_date: payment.payment_date,
+          payment_method: payment.payment_method,
+          leases: payment.leases
+        }));
+
+        setPayments(transformedPayments);
+
+        // Calculate rent summary using the new rent calculation system
+        const propertiesWithLeases: PropertyWithLease[] = properties.map(prop => ({
+          id: prop.id,
+          lease_id: prop.leases[0].id,
+          monthly_rent: prop.leases[0].monthly_rent,
+          start_date: prop.leases[0].start_date,
+          is_active: prop.leases[0].is_active
+        }));
+
+        const rentPayments: RentPayment[] = (paymentsData || []).map(payment => ({
+          id: payment.id,
+          lease_id: payment.lease_id,
+          payment_date: payment.payment_date,
+          payment_amount: payment.payment_amount,
+          status: payment.status as 'completed' | 'pending' | 'failed'
+        }));
+
+        // Calculate rent summary
+        const rentSummary = calculateRentSummary(propertiesWithLeases, rentPayments);
+
+        // Calculate additional metrics for display
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+        
+        const thisMonthPayments = transformedPayments.filter(p => {
+          const paymentDate = new Date(p.date);
+          return paymentDate.getMonth() === currentMonth && paymentDate.getFullYear() === currentYear;
+        });
+
+        const paymentsThisMonth = thisMonthPayments.length;
+        const collectionRate = transformedPayments.length > 0 
+          ? (transformedPayments.filter(p => p.status === 'completed').length / transformedPayments.length) * 100 
+          : 0;
+
+        setSummary({
+          totalCollected: rentSummary.totalCollected,
+          totalPending: rentSummary.totalPending,
+          totalOverdue: rentSummary.totalOverdue,
+          paymentsThisMonth,
+          collectionRate
+        });
+
+      } catch (error: any) {
+        console.error('Error fetching payments:', error);
+        alert('Failed to load payments: ' + error.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPayments();
+  }, [user?.id]);
 
   const filteredPayments = payments.filter(payment => {
     const matchesSearch = payment.propertyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -187,6 +297,20 @@ export const PaymentHistory: React.FC = () => {
     a.click();
     window.URL.revokeObjectURL(url);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen relative overflow-hidden floating-orbs flex items-center justify-center">
+        <div className="glass-card rounded-xl p-8 max-w-md w-full mx-4 text-center">
+          <div className="w-16 h-16 glass rounded-full flex items-center justify-center mx-auto mb-4 glow">
+            <Clock className="w-8 h-8 text-green-800 animate-spin" />
+          </div>
+          <h2 className="text-2xl font-bold text-glass mb-2">Loading Payments</h2>
+          <p className="text-glass-muted">Please wait while we fetch your payment history...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen relative overflow-hidden floating-orbs">
@@ -296,7 +420,7 @@ export const PaymentHistory: React.FC = () => {
               <TrendingUp size={16} className="text-green-700" />
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Total Collected</h3>
-            <p className="text-2xl font-bold text-glass">₹{mockSummary.totalCollected.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-glass">₹{summary.totalCollected.toLocaleString()}</p>
             <p className="text-sm text-green-700 mt-2">This month</p>
           </div>
 
@@ -307,7 +431,7 @@ export const PaymentHistory: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Pending</h3>
-            <p className="text-2xl font-bold text-orange-600">₹{mockSummary.totalPending.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-orange-600">₹{summary.totalPending.toLocaleString()}</p>
             <p className="text-sm text-orange-600 mt-2">Awaiting</p>
           </div>
 
@@ -319,7 +443,7 @@ export const PaymentHistory: React.FC = () => {
               <TrendingDown size={16} className="text-red-600" />
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Overdue</h3>
-            <p className="text-2xl font-bold text-red-600">₹{mockSummary.totalOverdue.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-red-600">₹{summary.totalOverdue.toLocaleString()}</p>
             <p className="text-sm text-red-600 mt-2">Past due</p>
           </div>
 
@@ -330,7 +454,7 @@ export const PaymentHistory: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Payments</h3>
-            <p className="text-2xl font-bold text-glass">{mockSummary.paymentsThisMonth}</p>
+            <p className="text-2xl font-bold text-glass">{summary.paymentsThisMonth}</p>
             <p className="text-sm text-green-700 mt-2">This month</p>
           </div>
 
@@ -341,7 +465,7 @@ export const PaymentHistory: React.FC = () => {
               </div>
             </div>
             <h3 className="text-sm font-medium text-glass-muted mb-1">Collection Rate</h3>
-            <p className="text-2xl font-bold text-glass">{mockSummary.collectionRate}%</p>
+            <p className="text-2xl font-bold text-glass">{summary.collectionRate.toFixed(1)}%</p>
             <p className="text-sm text-green-700 mt-2">Success rate</p>
           </div>
         </div>
@@ -482,7 +606,10 @@ export const PaymentHistory: React.FC = () => {
                 {paginatedPayments.map((payment) => (
                   <tr key={payment.id} className="border-b border-white border-opacity-10 hover:bg-white hover:bg-opacity-5">
                     <td className="p-4 text-sm text-glass">
-                      {new Date(payment.date).toLocaleDateString()}
+                      {payment.created_at ? 
+                        new Date(payment.created_at).toLocaleDateString() : 
+                        new Date(payment.date).toLocaleDateString()
+                      }
                     </td>
                     <td className="p-4 text-sm text-glass font-medium">
                       {payment.propertyName}

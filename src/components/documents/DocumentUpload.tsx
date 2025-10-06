@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -26,6 +26,8 @@ import {
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
+import { uploadDocument, fetchUserDocuments, DocumentMetadata } from '../../utils/documentUpload';
+import { supabase } from '../../lib/supabase';
 
 interface UploadFile {
   id: string;
@@ -35,10 +37,10 @@ interface UploadFile {
   type: string;
   progress: number;
   status: 'uploading' | 'processing' | 'completed' | 'error';
-  category: string;
+  docType: string;
   propertyId: string;
-  expiryDate: string;
-  description: string;
+  leaseId: string;
+  tenantId: string;
   ocrText?: string;
 }
 
@@ -47,16 +49,9 @@ interface Property {
   name: string;
 }
 
-const mockProperties: Property[] = [
-  { id: '1', name: 'Green Valley Apartment' },
-  { id: '2', name: 'Sunrise Villa' },
-  { id: '3', name: 'City Center Office' },
-  { id: '4', name: 'Metro Plaza Shop' },
-  { id: '5', name: 'Garden View Apartment' },
-  { id: '6', name: 'Lakeside Cottage' }
-];
+// Properties will be fetched from Supabase
 
-const categories = [
+const docTypes = [
   { id: 'lease', name: 'Lease Agreements' },
   { id: 'legal', name: 'Legal Documents' },
   { id: 'financial', name: 'Financial Records' },
@@ -71,6 +66,8 @@ export const DocumentUpload: React.FC = () => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadComplete, setUploadComplete] = useState(false);
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [loading, setLoading] = useState(true);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -79,6 +76,37 @@ export const DocumentUpload: React.FC = () => {
     logout();
     navigate('/auth/login');
   };
+
+  // Fetch properties from Supabase
+  useEffect(() => {
+    const fetchProperties = async () => {
+      if (!user?.id) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from('properties')
+          .select('id, name')
+          .eq('owner_id', user.id)
+          .eq('active', 'Y')
+          .order('name');
+
+        if (error) {
+          console.error('Error fetching properties:', error);
+        } else {
+          setProperties(data || []);
+        }
+      } catch (err) {
+        console.error('Error fetching properties:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProperties();
+  }, [user?.id]);
 
   const getFileIcon = (type: string) => {
     if (type.includes('pdf')) return <FileText className="w-8 h-8 text-red-600" />;
@@ -128,10 +156,10 @@ export const DocumentUpload: React.FC = () => {
       type: file.type,
       progress: 0,
       status: 'uploading',
-      category: 'other',
+      docType: 'other',
       propertyId: '',
-      expiryDate: '',
-      description: '',
+      leaseId: '',
+      tenantId: '',
       ocrText: file.type.includes('pdf') ? 'Sample OCR text extracted from document...' : undefined
     }));
 
@@ -180,17 +208,42 @@ export const DocumentUpload: React.FC = () => {
   };
 
   const handleBatchUpload = async () => {
+    if (uploadFiles.length === 0) return;
+    
     setIsUploading(true);
     
-    // Simulate batch processing
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    setIsUploading(false);
-    setUploadComplete(true);
-    
-    setTimeout(() => {
-      navigate('/documents');
-    }, 2000);
+    try {
+      const uploadPromises = uploadFiles.map(async (uploadFile) => {
+        try {
+          const uploadedDoc = await uploadDocument(
+            uploadFile.file,
+            uploadFile.propertyId || undefined,
+            uploadFile.leaseId || undefined,
+            uploadFile.tenantId || undefined,
+            uploadFile.docType
+          );
+          
+          return uploadedDoc;
+        } catch (error) {
+          console.error(`Error uploading file ${uploadFile.name}:`, error);
+          throw error;
+        }
+      });
+      
+      await Promise.all(uploadPromises);
+      
+      setIsUploading(false);
+      setUploadComplete(true);
+      
+      setTimeout(() => {
+        navigate('/documents');
+      }, 2000);
+      
+    } catch (error) {
+      console.error('Error uploading documents:', error);
+      alert('Failed to upload documents. Please try again.');
+      setIsUploading(false);
+    }
   };
 
   const applyToAll = (property: string, value: string) => {
@@ -372,12 +425,12 @@ export const DocumentUpload: React.FC = () => {
               <div className="flex gap-3">
                 <div className="flex items-center gap-2">
                   <select
-                    onChange={(e) => applyToAll('category', e.target.value)}
+                    onChange={(e) => applyToAll('docType', e.target.value)}
                     className="glass-input rounded-lg px-3 py-2 text-glass text-sm"
                   >
-                    <option value="">Apply category to all</option>
-                    {categories.map((cat) => (
-                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    <option value="">Apply document type to all</option>
+                    {docTypes.map((type) => (
+                      <option key={type.id} value={type.id}>{type.name}</option>
                     ))}
                   </select>
                 </div>
@@ -388,7 +441,7 @@ export const DocumentUpload: React.FC = () => {
                     className="glass-input rounded-lg px-3 py-2 text-glass text-sm"
                   >
                     <option value="">Apply property to all</option>
-                    {mockProperties.map((prop) => (
+                    {properties.map((prop) => (
                       <option key={prop.id} value={prop.id}>{prop.name}</option>
                     ))}
                   </select>
@@ -458,14 +511,14 @@ export const DocumentUpload: React.FC = () => {
                       {uploadFile.status === 'completed' && (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
                           <div>
-                            <label className="block text-sm font-medium text-glass mb-1">Category</label>
+                            <label className="block text-sm font-medium text-glass mb-1">Document Type</label>
                             <select
-                              value={uploadFile.category}
-                              onChange={(e) => updateFileProperty(uploadFile.id, 'category', e.target.value)}
+                              value={uploadFile.docType}
+                              onChange={(e) => updateFileProperty(uploadFile.id, 'docType', e.target.value)}
                               className="w-full glass-input rounded-lg px-3 py-2 text-glass text-sm"
                             >
-                              {categories.map((cat) => (
-                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                              {docTypes.map((type) => (
+                                <option key={type.id} value={type.id}>{type.name}</option>
                               ))}
                             </select>
                           </div>
@@ -478,7 +531,7 @@ export const DocumentUpload: React.FC = () => {
                               className="w-full glass-input rounded-lg px-3 py-2 text-glass text-sm"
                             >
                               <option value="">Select property</option>
-                              {mockProperties.map((prop) => (
+                              {properties.map((prop) => (
                                 <option key={prop.id} value={prop.id}>{prop.name}</option>
                               ))}
                             </select>

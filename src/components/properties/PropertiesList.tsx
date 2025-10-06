@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, Filter, Grid3x3 as Grid3X3, List, Plus, MapPin, IndianRupee, User, Phone, Mail, Building2, LogOut, Bell, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2 } from 'lucide-react';
+import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Phone, Mail, Building2, LogOut, Bell, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
+import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
+import { createPropertyAuditEvent, createLeaseAuditEvent } from '../../utils/auditTrail';
+import { ImageWithFallback } from '../ui/ImageWithFallback';
 
 interface Property {
   id: string;
@@ -15,7 +18,7 @@ interface Property {
   tenantPhone: string;
   tenantEmail: string;
   status: 'occupied' | 'vacant' | 'maintenance';
-  paymentStatus: 'paid' | 'pending' | 'overdue';
+  paymentStatus: 'paid' | 'pending' | 'overdue' | null;
   image: string;
   dueDate: string;
   propertyType: 'apartment' | 'villa' | 'office' | 'shop';
@@ -49,106 +52,11 @@ interface SupabaseProperty {
   }[];
 }
 
-const mockProperties: Property[] = [
-  {
-    id: '1',
-    name: 'Green Valley Apartment',
-    address: 'Sector 18, Noida, UP',
-    rent: 15000,
-    tenant: 'Amit Sharma',
-    tenantPhone: '+91 9876543210',
-    tenantEmail: 'amit.sharma@email.com',
-    status: 'occupied',
-    paymentStatus: 'paid',
-    image: 'https://images.pexels.com/photos/1396122/pexels-photo-1396122.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '2025-01-05',
-    propertyType: 'apartment',
-    bedrooms: 2,
-    area: 1200
-  },
-  {
-    id: '2',
-    name: 'Sunrise Villa',
-    address: 'DLF Phase 2, Gurgaon, HR',
-    rent: 25000,
-    tenant: 'Priya Patel',
-    tenantPhone: '+91 9876543211',
-    tenantEmail: 'priya.patel@email.com',
-    status: 'occupied',
-    paymentStatus: 'pending',
-    image: 'https://images.pexels.com/photos/1396132/pexels-photo-1396132.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '2025-01-10',
-    propertyType: 'villa',
-    bedrooms: 4,
-    area: 2500
-  },
-  {
-    id: '3',
-    name: 'City Center Office',
-    address: 'Connaught Place, Delhi',
-    rent: 35000,
-    tenant: 'Tech Solutions Ltd',
-    tenantPhone: '+91 9876543212',
-    tenantEmail: 'contact@techsolutions.com',
-    status: 'occupied',
-    paymentStatus: 'overdue',
-    image: 'https://images.pexels.com/photos/2102587/pexels-photo-2102587.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '2024-12-25',
-    propertyType: 'office',
-    area: 800
-  },
-  {
-    id: '4',
-    name: 'Lakeside Cottage',
-    address: 'Manesar, Gurgaon, HR',
-    rent: 18000,
-    tenant: '',
-    tenantPhone: '',
-    tenantEmail: '',
-    status: 'vacant',
-    paymentStatus: 'pending',
-    image: 'https://images.pexels.com/photos/1396196/pexels-photo-1396196.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '',
-    propertyType: 'villa',
-    bedrooms: 3,
-    area: 1800
-  },
-  {
-    id: '5',
-    name: 'Metro Plaza Shop',
-    address: 'Rajouri Garden, Delhi',
-    rent: 12000,
-    tenant: 'Fashion Hub',
-    tenantPhone: '+91 9876543213',
-    tenantEmail: 'info@fashionhub.com',
-    status: 'occupied',
-    paymentStatus: 'paid',
-    image: 'https://images.pexels.com/photos/2102587/pexels-photo-2102587.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '2025-01-03',
-    propertyType: 'shop',
-    area: 400
-  },
-  {
-    id: '6',
-    name: 'Garden View Apartment',
-    address: 'Indirapuram, Ghaziabad, UP',
-    rent: 16000,
-    tenant: '',
-    tenantPhone: '',
-    tenantEmail: '',
-    status: 'maintenance',
-    paymentStatus: 'pending',
-    image: 'https://images.pexels.com/photos/1396122/pexels-photo-1396122.jpeg?auto=compress&cs=tinysrgb&w=400',
-    dueDate: '',
-    propertyType: 'apartment',
-    bedrooms: 3,
-    area: 1400
-  }
-];
 
 export const PropertiesList: React.FC = () => {
-  const [properties, setProperties] = useState<Property[]>(mockProperties);
+  const [properties, setProperties] = useState<Property[]>([]);
   const [supabaseProperties, setSupabaseProperties] = useState<SupabaseProperty[]>([]);
+  const [payments, setPayments] = useState<RentPayment[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -179,6 +87,7 @@ export const PropertiesList: React.FC = () => {
           .select(`
             *,
             leases(
+              id,
               monthly_rent,
               security_deposit,
               maintenance_charges,
@@ -192,13 +101,45 @@ export const PropertiesList: React.FC = () => {
               )
             )
           `)
-          .eq('owner_id', user.id);
+          .eq('owner_id', user.id)
+          .eq('active', 'Y');
 
         if (fetchError) {
           throw fetchError;
         }
 
         setSupabaseProperties(data || []);
+
+        // Fetch payments for rent status calculation
+        const { data: paymentsData, error: paymentsError } = await supabase
+          .from('payments')
+          .select(`
+            *,
+            leases!inner(
+              id,
+              property_id,
+              is_active,
+              properties(
+                id,
+                name
+              )
+            )
+          `)
+          .in('leases.property_id', (data || []).map(p => p.id))
+          .eq('leases.is_active', true);
+
+        if (paymentsError) {
+          console.warn('Error fetching payments:', paymentsError);
+        } else {
+          const rentPayments: RentPayment[] = (paymentsData || []).map(payment => ({
+            id: payment.id,
+            lease_id: (payment.leases as any)?.id || '',
+            payment_date: payment.payment_date,
+            payment_amount: payment.payment_amount,
+            status: payment.status as 'completed' | 'pending' | 'failed'
+          }));
+          setPayments(rentPayments);
+        }
       } catch (err: any) {
         console.error('Error fetching properties:', err);
         setError(err.message || 'Failed to load properties');
@@ -219,6 +160,23 @@ export const PropertiesList: React.FC = () => {
           prop.leases.find(lease => lease.is_active) || prop.leases[0] : null;
         const tenant = activeLease?.tenants || null;
         
+        
+        // Calculate rent status using new system - only for occupied properties
+        let paymentStatus: 'paid' | 'pending' | 'overdue' | null = null;
+        if (activeLease && prop.status === 'occupied') {
+          const propertyWithLease: PropertyWithLease = {
+            id: prop.id,
+            lease_id: (activeLease as any).id,
+            monthly_rent: activeLease.monthly_rent,
+            start_date: activeLease.start_date,
+            is_active: activeLease.is_active
+          };
+          
+          const rentStatus = calculateRentStatus(propertyWithLease, payments);
+          paymentStatus = rentStatus.status;
+          
+        }
+        
         return {
           id: prop.id,
           name: prop.name || 'Unnamed Property',
@@ -228,7 +186,7 @@ export const PropertiesList: React.FC = () => {
           tenantPhone: tenant?.phone || '',
           tenantEmail: tenant?.email || '',
           status: (prop.status as 'occupied' | 'vacant' | 'maintenance') || 'vacant',
-          paymentStatus: 'pending' as const, // Will be populated when we add payment data
+          paymentStatus,
           image: prop.images ? (() => {
             try {
               const parsed = JSON.parse(prop.images);
@@ -245,55 +203,102 @@ export const PropertiesList: React.FC = () => {
       });
       setProperties(convertedProperties);
     }
-  }, [supabaseProperties]);
+  }, [supabaseProperties, payments]);
 
-  // Delete property function (also deletes related leases and tenants)
+  // Delete property function (soft-end active leases and mark property inactive)
   const deleteProperty = async (id: string) => {
     try {
-      // First, get all leases for this property to delete related tenants
-      const { data: leases, error: leasesError } = await supabase
+      // Get property name for audit trail
+      const property = supabaseProperties.find(p => p.id === id);
+      const propertyName = property?.name || 'Unknown Property';
+      
+      // Store timestamp in local timezone format to match existing data
+      const now = new Date();
+      // Create timestamp in the same format as existing data (local timezone without Z)
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+      
+      const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+      const currentDate = `${year}-${month}-${day}`;
+      
+      // Debug logging
+      console.log('Property deletion debug - storing:', {
+        propertyName,
+        currentTime,
+        currentDate,
+        now: now.toISOString(),
+        nowLocal: now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      });
+      
+      // 1) End-date active leases for this property with updated_at timestamp
+      const { data: activeLeases } = await supabase
         .from('leases')
-        .select('tenant_id')
-        .eq('property_id', id);
+        .select('id, tenants(name)')
+        .eq('property_id', id)
+        .eq('is_active', true);
 
-      if (leasesError) {
-        throw leasesError;
+      const { error: endLeaseError } = await supabase
+        .from('leases')
+        .update({ 
+          is_active: false, 
+          end_date: currentDate,
+          updated_at: currentTime  // Local timezone timestamp
+        })
+        .eq('property_id', id)
+        .eq('is_active', true);
+
+      if (endLeaseError) {
+        throw endLeaseError;
       }
 
-      // Delete related tenants (if any)
-      if (leases && leases.length > 0) {
-        const tenantIds = leases.map(lease => lease.tenant_id).filter(Boolean);
-        if (tenantIds.length > 0) {
-          const { error: tenantsError } = await supabase
-            .from('tenants')
-            .delete()
-            .in('id', tenantIds);
-          
-          if (tenantsError) {
-            console.warn('Error deleting tenants:', tenantsError);
-            // Continue with property deletion even if tenant deletion fails
-          }
+      // Create audit events for ended leases
+      if (activeLeases) {
+        for (const lease of activeLeases) {
+          const tenantName = (lease.tenants as any)?.name || 'Unknown Tenant';
+          await createLeaseAuditEvent(
+            lease.id,
+            propertyName,
+            tenantName,
+            'ended',
+            { end_date: currentDate }
+          );
         }
       }
 
-      // Delete the property (this will cascade delete leases due to foreign key)
-      const { error } = await supabase
+      // 2) Mark property inactive (soft delete) and status vacant with updated_at timestamp
+      const { error: propUpdateError } = await supabase
         .from('properties')
-        .delete()
+        .update({ 
+          active: 'N', 
+          status: 'vacant',
+          updated_at: currentTime  // Local timezone timestamp
+        })
         .eq('id', id);
 
-      if (error) {
-        throw error;
+      if (propUpdateError) {
+        throw propUpdateError;
       }
 
-      // Remove from local state
+      // Create audit event for property deletion
+      await createPropertyAuditEvent(
+        id,
+        propertyName,
+        'deleted',
+        { active: 'N', status: 'vacant' }
+      );
+
+      // 3) Remove from UI
       setProperties(prev => prev.filter(p => p.id !== id));
       setSupabaseProperties(prev => prev.filter(p => p.id !== id));
       
-      // Show success message (you can add a toast notification here)
-      console.log('Property and related data deleted successfully');
+      console.log('Property set inactive and leases ended with updated timestamps and audit trail');
     } catch (err: any) {
-      console.error('Error deleting property:', err);
+      console.error('Error soft-deleting property:', err);
       setError(err.message || 'Failed to delete property');
     }
   };
@@ -347,18 +352,21 @@ export const PropertiesList: React.FC = () => {
   const PropertyCard: React.FC<{ property: Property }> = ({ property }) => (
     <div className="glass-card rounded-xl overflow-hidden hover:scale-105 transition-all duration-300 glow group">
       <div className="relative h-48">
-        <img
+        <ImageWithFallback
           src={property.image}
           alt={property.name}
-          className="w-full h-full object-cover"
+          className="w-full h-full"
+          fallbackText="No Image"
         />
         <div className="absolute top-3 right-3 flex gap-2">
           <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
             {property.status}
           </span>
-          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
-            {property.paymentStatus}
-          </span>
+          {property.paymentStatus && (
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+              {property.paymentStatus}
+            </span>
+          )}
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         <div className="absolute bottom-3 left-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -427,10 +435,11 @@ export const PropertiesList: React.FC = () => {
   const PropertyListItem: React.FC<{ property: Property }> = ({ property }) => (
     <div className="glass-card rounded-xl p-4 hover:scale-[1.02] transition-all duration-300 glow">
       <div className="flex items-center gap-4">
-        <img
+        <ImageWithFallback
           src={property.image}
           alt={property.name}
-          className="w-20 h-20 object-cover rounded-lg"
+          className="w-20 h-20 rounded-lg"
+          fallbackText="No Image"
         />
         
         <div className="flex-1">
@@ -446,9 +455,11 @@ export const PropertiesList: React.FC = () => {
               <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
                 {property.status}
               </span>
-              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
-                {property.paymentStatus}
-              </span>
+              {property.paymentStatus && (
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                  {property.paymentStatus}
+                </span>
+              )}
             </div>
           </div>
           

@@ -14,4 +14,25 @@ export default defineConfig({
     exclude: ['lucide-react'],
     include: ['react', 'react-dom'],
   },
+  build: {
+    target: 'esnext',
+    minify: 'esbuild',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          supabase: ['@supabase/supabase-js'],
+          ui: ['@radix-ui/react-accordion', '@radix-ui/react-label', '@radix-ui/react-slot', '@radix-ui/react-switch', '@radix-ui/react-tooltip'],
+          icons: ['lucide-react'],
+          animations: ['framer-motion', 'gsap', 'motion'],
+        }
+      }
+    }
+  },
+  server: {
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'unsafe-none',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    }
+  }
 });
