@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User, LoginForm, SignupForm } from '../types/auth';
 import { supabase } from '../lib/supabase';
+import { triggerN8nWebhook } from '../lib/utils';
 
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -92,6 +93,14 @@ export const useAuth = () => {
               // Don't return false, allow login to proceed
             } else {
               console.log('User table insert success');
+              // First verified login → send welcome message via n8n
+              triggerN8nWebhook('user_verified', {
+                id: authData.user.id,
+                email: authData.user.email,
+                name: authData.user.user_metadata?.full_name || '',
+                phone: authData.user.user_metadata?.phone || '',
+                verifiedAt: authData.user.email_confirmed_at,
+              });
             }
           }
         }
@@ -118,6 +127,7 @@ export const useAuth = () => {
         email: data.email,
         password: data.password,
         options: {
+          emailRedirectTo: `${window.location.origin}/#/auth/login`,
           data: {
             full_name: data.name,
             phone: data.phone,
@@ -132,6 +142,15 @@ export const useAuth = () => {
 
       if (authData.user) {
         // User created successfully, but do NOT insert into users table yet
+        // Fire-and-forget webhook to n8n for post-signup automation
+        triggerN8nWebhook('user_signup', {
+          id: authData.user.id,
+          email: data.email,
+          name: data.name,
+          phone: data.phone,
+          propertyCount: data.propertyCount,
+          createdAt: new Date().toISOString()
+        });
         return true;
       }
 

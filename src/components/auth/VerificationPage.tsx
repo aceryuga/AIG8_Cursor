@@ -4,6 +4,7 @@ import { Mail, CheckCircle, Clock } from 'lucide-react';
 import { AuthLayout } from './AuthLayout';
 import { Button } from '../webapp-ui/Button';
 import { maskEmail } from '../../utils/validation';
+import { supabase } from '../../lib/supabase';
 
 export const VerificationPage: React.FC = () => {
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -23,12 +24,19 @@ export const VerificationPage: React.FC = () => {
 
   const handleResend = async () => {
     setResending(true);
-    
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    setResending(false);
-    setResendCooldown(60);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email
+      });
+      if (error) {
+        console.error('Resend verification error:', error);
+      } else {
+        setResendCooldown(60);
+      }
+    } finally {
+      setResending(false);
+    }
   };
 
   const handleVerifyDemo = () => {
