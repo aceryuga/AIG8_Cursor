@@ -19,6 +19,7 @@ import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
+import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 
 interface PaymentForm {
   propertyId: string;
@@ -27,6 +28,8 @@ interface PaymentForm {
   method: 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'card' | '';
   reference: string;
   notes: string;
+  paymentType: 'Rent' | 'Maintenance' | 'Security Deposit' | 'Other';
+  paymentTypeDetails: string;
 }
 
 interface Property {
@@ -44,7 +47,9 @@ export const RecordPayment: React.FC = () => {
     date: new Date().toISOString().split('T')[0], // Local date for input
     method: '',
     reference: '',
-    notes: ''
+    notes: '',
+    paymentType: 'Rent',
+    paymentTypeDetails: ''
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -151,6 +156,10 @@ export const RecordPayment: React.FC = () => {
       newErrors.reference = 'Transaction reference is required';
     }
 
+    if (form.paymentType === 'Other' && !form.paymentTypeDetails.trim()) {
+      newErrors.paymentTypeDetails = 'Payment details are required when "Other" is selected';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -217,6 +226,8 @@ export const RecordPayment: React.FC = () => {
           payment_method: form.method,
           reference: form.reference || null,
           notes: form.notes || null,
+          payment_type: form.paymentType,
+          payment_type_details: form.paymentType === 'Other' ? form.paymentTypeDetails : null,
           status: 'completed'
         });
 
@@ -302,6 +313,7 @@ export const RecordPayment: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -494,6 +506,53 @@ export const RecordPayment: React.FC = () => {
                 )}
               </div>
 
+              {/* Payment Type */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-glass">Payment Type</label>
+                <div className="relative">
+                  <FileText size={18} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-glass-muted" />
+                  <select
+                    value={form.paymentType}
+                    onChange={handleChange('paymentType')}
+                    className={`w-full h-11 pl-10 pr-3 rounded-lg glass-input text-glass transition-all duration-200 ${
+                      errors.paymentType ? 'border-red-400' : 'focus:border-white'
+                    }`}
+                  >
+                    <option value="Rent">Rent</option>
+                    <option value="Maintenance">Maintenance</option>
+                    <option value="Security Deposit">Security Deposit</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                {errors.paymentType && (
+                  <p className="text-sm text-red-600">{errors.paymentType}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Payment Type Details - Only show when "Other" is selected */}
+            {form.paymentType === 'Other' && (
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-glass">Payment Details</label>
+                <div className="relative">
+                  <FileText size={18} className="absolute left-3 top-3 text-glass-muted" />
+                  <textarea
+                    value={form.paymentTypeDetails}
+                    onChange={handleChange('paymentTypeDetails')}
+                    placeholder="Please specify the payment type details..."
+                    className={`w-full pl-10 pr-3 py-3 rounded-lg glass-input text-glass transition-all duration-200 resize-none ${
+                      errors.paymentTypeDetails ? 'border-red-400' : 'focus:border-white'
+                    }`}
+                    rows={3}
+                  />
+                </div>
+                {errors.paymentTypeDetails && (
+                  <p className="text-sm text-red-600">{errors.paymentTypeDetails}</p>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Reference Number */}
               <Input
                 label={`Reference ${form.method === 'cheque' ? '(Cheque Number)' : form.method === 'bank_transfer' ? '(Transaction ID)' : '(Optional)'}`}
@@ -542,7 +601,7 @@ export const RecordPayment: React.FC = () => {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-glass-muted">Date:</span>
-                    <span className="text-glass">{new Date(form.date).toLocaleDateString()}</span>
+                    <span className="text-glass">{formatDateDDMMYYYY(form.date)}</span>
                   </div>
                   {form.method && (
                     <div className="flex justify-between">

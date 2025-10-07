@@ -30,6 +30,7 @@ import { AIReconciliation } from './components/payments/AIReconciliation';
 import { DocumentVault } from './components/documents/DocumentVault';
 import { DocumentUpload } from './components/documents/DocumentUpload';
 import { DocumentViewer } from './components/documents/DocumentViewer';
+import { Gallery } from './pages/Gallery';
 import { SettingsPage } from './components/settings/SettingsPage';
 
 
@@ -310,6 +311,9 @@ function App() {
         <Route path="/documents" element={<DocumentVault />} />
         <Route path="/documents/upload" element={<DocumentUpload />} />
         <Route path="/documents/:id" element={<DocumentViewer />} />
+
+        {/* Gallery Route */}
+        <Route path="/gallery" element={<Gallery />} />
 
         {/* Settings Route */}
         <Route path="/settings" element={<SettingsPage />} />

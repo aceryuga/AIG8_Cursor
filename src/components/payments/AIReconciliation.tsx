@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { useAuth } from '../../hooks/useAuth';
+import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 
 interface BankTransaction {
   id: string;
@@ -248,6 +249,7 @@ const AIReconciliation: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -553,7 +555,7 @@ const AIReconciliation: React.FC = () => {
                       return (
                         <tr key={payment.id} className="border-b border-white border-opacity-10 hover:bg-white hover:bg-opacity-5">
                           <td className="p-4 text-sm text-glass">
-                            {transaction ? new Date(transaction.date).toLocaleDateString() : '-'}
+                            {transaction ? formatDateDDMMYYYY(transaction.date) : '-'}
                           </td>
                           <td className="p-4 text-sm text-glass-muted max-w-xs truncate">
                             {transaction?.description || '-'}

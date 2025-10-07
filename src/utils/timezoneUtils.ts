@@ -123,6 +123,26 @@ export const getRelativeTime = (dateString: string): string => {
 };
 
 /**
+ * Format date in DD/MM/YYYY format for display
+ * @param dateString - Date string (ISO or any valid date format)
+ * @returns Formatted date string in DD/MM/YYYY format
+ */
+export const formatDateDDMMYYYY = (dateString: string | Date): string => {
+  const date = typeof dateString === 'string' ? new Date(dateString) : dateString;
+  
+  if (isNaN(date.getTime())) {
+    console.error('Invalid date in formatDateDDMMYYYY:', dateString);
+    return 'Invalid date';
+  }
+  
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  
+  return `${day}/${month}/${year}`;
+};
+
+/**
  * Create a date input value for HTML date inputs (YYYY-MM-DD format)
  * @param utcDateString - ISO string from Supabase
  * @returns Date string in YYYY-MM-DD format

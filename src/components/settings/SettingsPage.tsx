@@ -34,6 +34,7 @@ import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { PasswordStrength } from '../webapp-ui/PasswordStrength';
 import { useAuth } from '../../hooks/useAuth';
+import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 import { validateEmail, validatePhone, validatePassword } from '../../utils/validation';
 
 interface ProfileForm {
@@ -347,6 +348,7 @@ export const SettingsPage: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -923,7 +925,7 @@ export const SettingsPage: React.FC = () => {
                       <div key={index} className="flex items-center justify-between p-4 glass rounded-lg">
                         <div>
                           <p className="font-medium text-glass">{invoice.plan} Plan</p>
-                          <p className="text-sm text-glass-muted">{new Date(invoice.date).toLocaleDateString()}</p>
+                          <p className="text-sm text-glass-muted">{formatDateDDMMYYYY(invoice.date)}</p>
                         </div>
                         <div className="flex items-center gap-4">
                           <div className="text-right">

@@ -25,8 +25,8 @@ import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
+import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 import { calculateRentSummary, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
-import { getRelativeTime } from '../../utils/timezoneUtils';
 
 interface Payment {
   id: string;
@@ -38,6 +38,8 @@ interface Payment {
   reference: string;
   status: 'completed' | 'pending' | 'failed';
   notes?: string;
+  paymentType?: string;
+  paymentTypeDetails?: string;
   created_at?: string;
   updated_at?: string;
   // Database fields
@@ -77,8 +79,9 @@ export const PaymentHistory: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterMethod, setFilterMethod] = useState<string>('all');
+  const [filterPaymentType, setFilterPaymentType] = useState<string>('all');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [showNotifications, setShowNotifications] = useState(false);
   const itemsPerPage = 10;
@@ -102,12 +105,12 @@ export const PaymentHistory: React.FC = () => {
       try {
         setLoading(true);
         
-        // First get user's properties with lease information
+        // First get user's properties with lease information (including inactive leases)
         const { data: properties, error: propError } = await supabase
           .from('properties')
           .select(`
             id,
-            leases!inner(
+            leases(
               id,
               monthly_rent,
               start_date,
@@ -115,8 +118,7 @@ export const PaymentHistory: React.FC = () => {
             )
           `)
           .eq('owner_id', user.id)
-          .eq('active', 'Y')
-          .eq('leases.is_active', true);
+          .eq('active', 'Y');
 
         if (propError) {
           throw propError;
@@ -135,7 +137,25 @@ export const PaymentHistory: React.FC = () => {
           return;
         }
 
-        // Fetch payments with related data
+        // Get all lease IDs from properties (both active and inactive)
+        const allLeaseIds = properties.flatMap(prop => 
+          prop.leases ? prop.leases.map(lease => lease.id) : []
+        );
+
+        if (allLeaseIds.length === 0) {
+          setPayments([]);
+          setSummary({
+            totalCollected: 0,
+            totalPending: 0,
+            totalOverdue: 0,
+            paymentsThisMonth: 0,
+            collectionRate: 0
+          });
+          setLoading(false);
+          return;
+        }
+
+        // Fetch payments with related data (from all leases)
         const { data: paymentsData, error: paymentsError } = await supabase
           .from('payments')
           .select(`
@@ -153,8 +173,7 @@ export const PaymentHistory: React.FC = () => {
               )
             )
           `)
-          .in('leases.property_id', properties.map(p => p.id))
-          .eq('leases.is_active', true)
+          .in('lease_id', allLeaseIds)
           .order('payment_date', { ascending: false });
 
         if (paymentsError) {
@@ -172,6 +191,8 @@ export const PaymentHistory: React.FC = () => {
           reference: payment.reference || '',
           status: payment.status as 'completed' | 'pending' | 'failed',
           notes: payment.notes || '',
+          paymentType: payment.payment_type || 'Rent',
+          paymentTypeDetails: payment.payment_type_details || '',
           created_at: payment.created_at,
           updated_at: payment.updated_at,
           // Keep database fields for compatibility
@@ -183,13 +204,17 @@ export const PaymentHistory: React.FC = () => {
 
         setPayments(transformedPayments);
 
-        // Calculate rent summary using the new rent calculation system
-        const propertiesWithLeases: PropertyWithLease[] = properties.map(prop => ({
-          id: prop.id,
-          lease_id: prop.leases[0].id,
-          monthly_rent: prop.leases[0].monthly_rent,
-          start_date: prop.leases[0].start_date,
-          is_active: prop.leases[0].is_active
+        // Calculate rent summary using only active leases
+        const activeLeases = properties.flatMap(prop => 
+          prop.leases ? prop.leases.filter(lease => lease.is_active) : []
+        );
+        
+        const propertiesWithLeases: PropertyWithLease[] = activeLeases.map(lease => ({
+          id: lease.id, // Using lease ID as property ID for rent calculation
+          lease_id: lease.id,
+          monthly_rent: lease.monthly_rent,
+          start_date: lease.start_date,
+          is_active: lease.is_active
         }));
 
         const rentPayments: RentPayment[] = (paymentsData || []).map(payment => ({
@@ -244,11 +269,12 @@ export const PaymentHistory: React.FC = () => {
     
     const matchesStatus = filterStatus === 'all' || payment.status === filterStatus;
     const matchesMethod = filterMethod === 'all' || payment.method.toLowerCase() === filterMethod.toLowerCase();
+    const matchesPaymentType = filterPaymentType === 'all' || (payment.paymentType || 'Rent') === filterPaymentType;
     
     const matchesDateRange = (!dateRange.start || payment.date >= dateRange.start) &&
                             (!dateRange.end || payment.date <= dateRange.end);
     
-    return matchesSearch && matchesStatus && matchesMethod && matchesDateRange;
+    return matchesSearch && matchesStatus && matchesMethod && matchesPaymentType && matchesDateRange;
   });
 
   const totalPages = Math.ceil(filteredPayments.length / itemsPerPage);
@@ -274,7 +300,7 @@ export const PaymentHistory: React.FC = () => {
   };
 
   const exportToCSV = () => {
-    const headers = ['Date', 'Property', 'Tenant', 'Amount', 'Method', 'Reference', 'Status', 'Notes'];
+    const headers = ['Date', 'Property', 'Tenant', 'Amount', 'Type', 'Method', 'Reference', 'Status', 'Notes'];
     const csvContent = [
       headers.join(','),
       ...filteredPayments.map(payment => [
@@ -282,6 +308,7 @@ export const PaymentHistory: React.FC = () => {
         `"${payment.propertyName}"`,
         `"${payment.tenant}"`,
         payment.amount,
+        payment.paymentType || 'Rent',
         payment.method,
         payment.reference,
         payment.status,
@@ -333,6 +360,7 @@ export const PaymentHistory: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -510,13 +538,13 @@ export const PaymentHistory: React.FC = () => {
           {/* Expanded Filters */}
           {showFilters && (
             <div className="mt-6 pt-6 border-t border-white border-opacity-20">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
                 <div>
-                  <label className="block text-sm font-medium text-glass mb-2">Status</label>
+                  <label className="block text-xs font-medium text-glass mb-1">Status</label>
                   <select
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
-                    className="w-full glass-input rounded-lg px-3 py-2 text-glass h-11"
+                    className="w-full glass-input rounded-lg px-2 py-1.5 text-sm text-glass h-9"
                   >
                     <option value="all">All Status</option>
                     <option value="completed">Completed</option>
@@ -526,11 +554,11 @@ export const PaymentHistory: React.FC = () => {
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-glass mb-2">Payment Method</label>
+                  <label className="block text-xs font-medium text-glass mb-1">Method</label>
                   <select
                     value={filterMethod}
                     onChange={(e) => setFilterMethod(e.target.value)}
-                    className="w-full glass-input rounded-lg px-3 py-2 text-glass h-11"
+                    className="w-full glass-input rounded-lg px-2 py-1.5 text-sm text-glass h-9"
                   >
                     <option value="all">All Methods</option>
                     <option value="cash">Cash</option>
@@ -542,38 +570,56 @@ export const PaymentHistory: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-glass mb-2">From Date</label>
+                  <label className="block text-xs font-medium text-glass mb-1">Type</label>
+                  <select
+                    value={filterPaymentType}
+                    onChange={(e) => setFilterPaymentType(e.target.value)}
+                    className="w-full glass-input rounded-lg px-2 py-1.5 text-sm text-glass h-9"
+                  >
+                    <option value="all">All Types</option>
+                    <option value="Rent">Rent</option>
+                    <option value="Maintenance">Maintenance</option>
+                    <option value="Security Deposit">Security Deposit</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-glass mb-1">From</label>
                   <input
                     type="date"
                     value={dateRange.start}
                     onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-                    className="w-full glass-input rounded-lg px-3 py-2 text-glass h-11"
+                    className="w-full glass-input rounded-lg px-1.5 py-1.5 text-xs text-glass h-9"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-glass mb-2">To Date</label>
+                  <label className="block text-xs font-medium text-glass mb-1">To</label>
                   <input
                     type="date"
                     value={dateRange.end}
                     onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-                    className="w-full glass-input rounded-lg px-3 py-2 text-glass h-11"
+                    className="w-full glass-input rounded-lg px-1.5 py-1.5 text-xs text-glass h-9"
                   />
                 </div>
-              </div>
-              
-              <div className="mt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setFilterStatus('all');
-                    setFilterMethod('all');
-                    setDateRange({ start: '', end: '' });
-                    setSearchTerm('');
-                  }}
-                >
-                  Clear All Filters
-                </Button>
+
+                <div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setFilterStatus('all');
+                      setFilterMethod('all');
+                      setFilterPaymentType('all');
+                      setDateRange({ start: '', end: '' });
+                      setSearchTerm('');
+                    }}
+                    className="h-9 text-xs px-3"
+                  >
+                    Clear All
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -596,6 +642,7 @@ export const PaymentHistory: React.FC = () => {
                   <th className="text-left p-4 text-sm font-medium text-glass">Property</th>
                   <th className="text-left p-4 text-sm font-medium text-glass">Tenant</th>
                   <th className="text-left p-4 text-sm font-medium text-glass">Amount</th>
+                  <th className="text-left p-4 text-sm font-medium text-glass">Type</th>
                   <th className="text-left p-4 text-sm font-medium text-glass">Method</th>
                   <th className="text-left p-4 text-sm font-medium text-glass">Reference</th>
                   <th className="text-left p-4 text-sm font-medium text-glass">Status</th>
@@ -606,10 +653,7 @@ export const PaymentHistory: React.FC = () => {
                 {paginatedPayments.map((payment) => (
                   <tr key={payment.id} className="border-b border-white border-opacity-10 hover:bg-white hover:bg-opacity-5">
                     <td className="p-4 text-sm text-glass">
-                      {payment.created_at ? 
-                        new Date(payment.created_at).toLocaleDateString() : 
-                        new Date(payment.date).toLocaleDateString()
-                      }
+                      {formatDateDDMMYYYY(payment.date)}
                     </td>
                     <td className="p-4 text-sm text-glass font-medium">
                       {payment.propertyName}
@@ -619,6 +663,16 @@ export const PaymentHistory: React.FC = () => {
                     </td>
                     <td className="p-4 text-sm text-glass font-medium">
                       ₹{payment.amount.toLocaleString()}
+                    </td>
+                    <td className="p-4 text-sm text-glass">
+                      <div className="flex flex-col">
+                        <span className="font-medium">{payment.paymentType || 'Rent'}</span>
+                        {payment.paymentType === 'Other' && payment.paymentTypeDetails && (
+                          <span className="text-xs text-glass-muted mt-1">
+                            {payment.paymentTypeDetails}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="p-4 text-sm text-glass">
                       {payment.method}

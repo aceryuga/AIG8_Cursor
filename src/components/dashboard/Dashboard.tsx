@@ -213,10 +213,15 @@ export const Dashboard: React.FC = () => {
             //   tenantName: tenant
             // });
             
+            const paymentType = payment.payment_type || 'Rent';
+            const paymentTypeText = paymentType === 'Other' && payment.payment_type_details 
+              ? `${paymentType} (${payment.payment_type_details})`
+              : paymentType;
+            
             recentActivities.push({
               id: `payment-${payment.id}`,
               type: 'payment',
-              message: `Rent payment received from ${tenant} - ₹${payment.payment_amount.toLocaleString()}`,
+              message: `${paymentTypeText} payment received from ${tenant} - ₹${payment.payment_amount.toLocaleString()}`,
               time: getRelativeTime(activityTime),
               timestamp: new Date(activityTime).getTime(),
               status: payment.status === 'completed' ? 'success' : 'warning'
@@ -450,10 +455,10 @@ export const Dashboard: React.FC = () => {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'occupied': return 'text-green-700';
-      case 'vacant': return 'text-orange-600';
-      case 'maintenance': return 'text-red-600';
-      default: return 'text-glass-muted';
+      case 'occupied': return 'text-green-700 bg-green-100';
+      case 'vacant': return 'text-orange-600 bg-orange-100';
+      case 'maintenance': return 'text-red-600 bg-red-100';
+      default: return 'text-gray-600 bg-gray-100';
     }
   };
 
@@ -498,6 +503,7 @@ export const Dashboard: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -755,7 +761,10 @@ export const Dashboard: React.FC = () => {
                         className="w-full h-full"
                         fallbackText="No Image"
                       />
-                      <div className="absolute top-3 right-3">
+                      <div className="absolute top-3 right-3 flex gap-2">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
+                          {property.status}
+                        </span>
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
                           {property.paymentStatus}
                         </span>
@@ -774,9 +783,6 @@ export const Dashboard: React.FC = () => {
                           <p className="text-lg font-bold text-glass">₹{property.rent.toLocaleString()}</p>
                           <p className="text-xs text-glass-muted">per month</p>
                         </div>
-                        <span className={`text-sm font-medium ${getStatusColor(property.status)}`}>
-                          {property.status}
-                        </span>
                       </div>
 
                       {property.tenant && (

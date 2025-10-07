@@ -2332,8 +2332,10 @@ public,payments,payment_method,5,character varying,16,YES,null,NO
 public,payments,status,6,character varying,16,YES,null,NO
 public,payments,reference,7,character varying,64,YES,null,NO
 public,payments,notes,8,text,null,YES,null,NO
-public,payments,created_at,9,timestamp without time zone,null,YES,now(),NO
-public,payments,updated_at,10,timestamp without time zone,null,YES,now(),NO
+public,payments,payment_type,9,character varying,50,YES,Rent,NO
+public,payments,payment_type_details,10,text,null,YES,null,NO
+public,payments,created_at,11,timestamp without time zone,null,YES,now(),NO
+public,payments,updated_at,12,timestamp without time zone,null,YES,now(),NO
 public,properties,id,1,uuid,null,NO,gen_random_uuid(),NO
 public,properties,owner_id,2,uuid,null,YES,null,NO
 public,properties,name,3,character varying,128,NO,null,NO
@@ -2364,6 +2366,7 @@ public,tenants,email,4,character varying,128,YES,null,NO
 public,tenants,current_property_id,5,uuid,null,YES,null,NO
 public,tenants,created_at,6,timestamp without time zone,null,YES,now(),NO
 public,tenants,updated_at,7,timestamp without time zone,null,YES,now(),NO
+public,tenants,is_active,8,boolean,null,YES,true,NO
 public,users,id,1,uuid,null,NO,gen_random_uuid(),NO
 public,users,name,2,character varying,128,NO,null,NO
 public,users,email,3,character varying,128,NO,null,NO

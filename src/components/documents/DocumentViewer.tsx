@@ -3,6 +3,7 @@ import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Building2, LogOut, Bell, HelpCircle, User, Download, Share2, CreditCard as Edit, Trash2, FileText, Calendar, Tag, Home, Eye, ZoomIn, ZoomOut, RotateCw, Maximize, Copy, ExternalLink, AlertTriangle, CheckCircle, Clock, Image, FileSpreadsheet, File } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { useAuth } from '../../hooks/useAuth';
+import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 
 interface Document {
   id: string;
@@ -158,6 +159,7 @@ export const DocumentViewer: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -362,7 +364,7 @@ export const DocumentViewer: React.FC = () => {
 
                 <div>
                   <label className="text-sm font-medium text-glass-muted">Upload Date</label>
-                  <p className="mt-1 text-glass">{new Date(currentDocument.uploadDate).toLocaleDateString()}</p>
+                  <p className="mt-1 text-glass">{formatDateDDMMYYYY(currentDocument.uploadDate)}</p>
                 </div>
 
                 {currentDocument.expiryDate && (
@@ -370,7 +372,7 @@ export const DocumentViewer: React.FC = () => {
                     <label className="text-sm font-medium text-glass-muted">Expiry Date</label>
                     <div className="mt-1 flex items-center gap-2">
                       <Calendar size={14} className="text-glass-muted" />
-                      <p className="text-glass">{new Date(currentDocument.expiryDate).toLocaleDateString()}</p>
+                      <p className="text-glass">{formatDateDDMMYYYY(currentDocument.expiryDate)}</p>
                     </div>
                   </div>
                 )}
