@@ -710,12 +710,27 @@ export const PropertyDetails: React.FC = () => {
 
       // Update lease details if there's an active lease
       if (leaseId) {
+        // Create timestamp in local timezone format for updated_at
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const seconds = String(now.getSeconds()).padStart(2, '0');
+        const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+        
+        const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+
         const { error: leaseError } = await supabase
           .from('leases')
           .update({
             monthly_rent: editForm.rent,
             security_deposit: editForm.securityDeposit,
-            maintenance_charges: editForm.maintenanceCharges
+            maintenance_charges: editForm.maintenanceCharges,
+            start_date: editForm.leaseStart,
+            end_date: editForm.leaseEnd,
+            updated_at: currentTime
           })
           .eq('id', leaseId)
           .eq('is_active', true);
