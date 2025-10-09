@@ -17,9 +17,11 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
-import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
+import { formatDateDDMMYYYY, fromDateInput, getCurrentISTDateInput } from '../../utils/timezoneUtils';
+import { sanitizeText } from '../../utils/security';
 
 interface PaymentForm {
   propertyId: string;
@@ -44,7 +46,7 @@ export const RecordPayment: React.FC = () => {
   const [form, setForm] = useState<PaymentForm>({
     propertyId: '',
     amount: 0,
-    date: new Date().toISOString().split('T')[0], // Local date for input
+    date: getCurrentISTDateInput(), // Current date in IST for input
     method: '',
     reference: '',
     notes: '',
@@ -54,7 +56,6 @@ export const RecordPayment: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [success, setSuccess] = useState(false);
   const [properties, setProperties] = useState<Property[]>([]);
   const [propertiesLoading, setPropertiesLoading] = useState(true);
@@ -122,8 +123,8 @@ export const RecordPayment: React.FC = () => {
     fetchProperties();
   }, [user?.id]);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
@@ -201,6 +202,19 @@ export const RecordPayment: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Sanitize form data before validation and submission
+    const sanitizedForm = {
+      ...form,
+      reference: sanitizeText(form.reference),
+      notes: sanitizeText(form.notes),
+      paymentTypeDetails: sanitizeText(form.paymentTypeDetails),
+      amount: form.amount // Numbers don't need sanitization
+    };
+    
+    // Update form with sanitized data
+    setForm(sanitizedForm);
+    
     if (!validate()) return;
 
     const hasDuplicates = await checkForDuplicates();
@@ -222,7 +236,7 @@ export const RecordPayment: React.FC = () => {
         .insert({
           lease_id: selectedProperty.leaseId,
           payment_amount: form.amount,
-          payment_date: form.date, // Store as local date
+          payment_date: fromDateInput(form.date), // Convert to UTC for storage
           payment_method: form.method,
           reference: form.reference || null,
           notes: form.notes || null,
@@ -249,8 +263,13 @@ export const RecordPayment: React.FC = () => {
   };
 
   const handleChange = (field: keyof PaymentForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    const value = field === 'amount' ? parseFloat(e.target.value) || 0 : e.target.value;
-    setForm(prev => ({ ...prev, [field]: value }));
+    let value = e.target.value;
+    
+    // Don't sanitize during typing - only sanitize on form submission
+    // This allows users to type freely without interruption
+    
+    const finalValue = field === 'amount' ? parseFloat(value) || 0 : value;
+    setForm(prev => ({ ...prev, [field]: finalValue }));
     
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
@@ -332,17 +351,8 @@ export const RecordPayment: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>

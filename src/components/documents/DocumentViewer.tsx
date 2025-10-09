@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Building2, LogOut, Bell, HelpCircle, User, Download, Share2, CreditCard as Edit, Trash2, FileText, Calendar, Tag, Home, Eye, ZoomIn, ZoomOut, RotateCw, Maximize, Copy, ExternalLink, AlertTriangle, CheckCircle, Clock, Image, FileSpreadsheet, File } from 'lucide-react';
+import { ArrowLeft, Building2, LogOut, HelpCircle, User, Download, Share2, CreditCard as Edit, Trash2, FileText, Calendar, Tag, Home, Eye, ZoomIn, ZoomOut, RotateCw, Maximize, Copy, ExternalLink, AlertTriangle, CheckCircle, Clock, Image, FileSpreadsheet, File, X } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
+import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
 import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
+import { supabase } from '../../lib/supabase';
 
 interface Document {
   id: string;
@@ -75,20 +77,59 @@ const mockRelatedDocuments: RelatedDocument[] = [
 
 export const DocumentViewer: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const [showNotifications, setShowNotifications] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [showOCR, setShowOCR] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [currentDocument, setCurrentDocument] = useState<Document | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
-  const currentDocument = mockDocument; // In real app, fetch by id
+  // Fetch document by ID
+  useEffect(() => {
+    const fetchDocument = async () => {
+      if (!id) {
+        setError('Document ID is required');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        setError(null);
+
+        // For now, we'll use mock data but validate the ID exists
+        // In a real app, this would fetch from Supabase
+        const validIds = ['1', '2', '3', '4'];
+        
+        if (!validIds.includes(id)) {
+          setError('Document not found');
+          setLoading(false);
+          return;
+        }
+
+        // Simulate API delay
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Use mock data for valid IDs
+        setCurrentDocument(mockDocument);
+        setLoading(false);
+      } catch (err) {
+        console.error('Error fetching document:', err);
+        setError('Failed to load document');
+        setLoading(false);
+      }
+    };
+
+    fetchDocument();
+  }, [id]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -139,6 +180,82 @@ export const DocumentViewer: React.FC = () => {
     navigator.clipboard.writeText(text);
   };
 
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen relative overflow-hidden floating-orbs">
+        {/* Top Navigation */}
+        <header className="glass-card border-b border-white border-opacity-20 sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center h-16">
+              <div className="flex items-center gap-8">
+                <Link to="/dashboard" className="flex items-center gap-3">
+                  <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
+                    <Building2 className="w-5 h-5 text-green-800" />
+                  </div>
+                  <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
+                </Link>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-center min-h-96">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
+              <p className="text-glass-muted">Loading document...</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error || !currentDocument) {
+    return (
+      <div className="min-h-screen relative overflow-hidden floating-orbs">
+        {/* Top Navigation */}
+        <header className="glass-card border-b border-white border-opacity-20 sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center h-16">
+              <div className="flex items-center gap-8">
+                <Link to="/dashboard" className="flex items-center gap-3">
+                  <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
+                    <Building2 className="w-5 h-5 text-green-800" />
+                  </div>
+                  <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
+                </Link>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-center min-h-96">
+            <div className="text-center">
+              <AlertTriangle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+              <h2 className="text-2xl font-bold text-glass mb-2">Document Not Found</h2>
+              <p className="text-glass-muted mb-6">
+                {error || 'The document you are looking for does not exist or has been removed.'}
+              </p>
+              <div className="flex gap-4 justify-center">
+                <Button onClick={() => navigate('/documents')}>
+                  <ArrowLeft size={16} className="mr-2" />
+                  Back to Documents
+                </Button>
+                <Button variant="outline" onClick={() => navigate('/dashboard')}>
+                  Go to Dashboard
+                </Button>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen relative overflow-hidden floating-orbs">
       {/* Top Navigation */}
@@ -178,17 +295,8 @@ export const DocumentViewer: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>

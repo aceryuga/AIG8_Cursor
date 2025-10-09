@@ -2,13 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
-import { getRelativeTime } from '../../utils/timezoneUtils';
+import { getRecentActivityTime } from '../../utils/timezoneUtils';
+import { calculateLeaseStatus, getLeaseStatusColor, getLeaseStatusIcon } from '../../utils/leaseStatus';
 import { ImageWithFallback } from '../ui/ImageWithFallback';
+import { NotificationBell } from '../ui/NotificationBell';
 import { Link } from 'react-router-dom';
+import { PaymentService } from '../../services/paymentService';
 import { 
   Building2, 
   LogOut, 
-  Bell, 
   User, 
   HelpCircle, 
   Plus, 
@@ -27,7 +29,11 @@ import {
   Mail,
   Brain,
   ExternalLink,
-  X
+  X,
+  Image,
+  Wrench,
+  MessageSquare,
+  DollarSign,
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 
@@ -69,7 +75,6 @@ interface Activity {
 
 export const Dashboard: React.FC = () => {
   const { user, logout } = useAuth();
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showUserGuide, setShowUserGuide] = useState(false);
   const [showContactSupport, setShowContactSupport] = useState(false);
@@ -88,11 +93,6 @@ export const Dashboard: React.FC = () => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
       
-      // Close notifications if clicking outside
-      if (showNotifications && !target.closest('.notifications-dropdown')) {
-        setShowNotifications(false);
-      }
-      
       // Close help dropdown if clicking outside
       if (showHelp && !target.closest('.help-dropdown')) {
         setShowHelp(false);
@@ -103,7 +103,7 @@ export const Dashboard: React.FC = () => {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showNotifications, showHelp]);
+  }, [showHelp]);
 
   // Fetch data from Supabase
   useEffect(() => {
@@ -137,6 +137,11 @@ export const Dashboard: React.FC = () => {
                 phone,
                 email
               )
+            ),
+            property_images!left(
+              id,
+              image_url,
+              is_primary
             )
           `)
           .eq('owner_id', user.id)
@@ -148,27 +153,8 @@ export const Dashboard: React.FC = () => {
 
         setSupabaseProperties(properties || []);
 
-        // Fetch recent payments for payment status calculation
-        const { data: paymentsData, error: paymentsError } = await supabase
-          .from('payments')
-          .select(`
-            *,
-            leases!inner(
-              id,
-              property_id,
-              is_active,
-              properties(
-                id,
-                name
-              ),
-              tenants(
-                name
-              )
-            )
-          `)
-          .in('leases.property_id', properties?.map(p => p.id) || [])
-          .eq('leases.is_active', true)
-          .order('created_at', { ascending: false }); // Order by created_at for accurate activity timeline
+        // Fetch recent payments for payment status calculation using centralized service
+        const paymentsData = await PaymentService.getPaymentsForProperties(properties?.map(p => p.id) || []);
 
         // Fetch recently deleted properties for audit trail
         const { data: deletedProperties, error: deletedError } = await supabase
@@ -187,10 +173,129 @@ export const Dashboard: React.FC = () => {
           console.warn('Error fetching deleted properties:', deletedError);
         }
 
-        if (paymentsError) {
-          console.warn('Error fetching payments:', paymentsError);
-        } else {
-          setPayments(paymentsData || []);
+        setPayments(paymentsData);
+
+        // Fetch recent documents for document upload activities
+        const { data: documentsData, error: documentsError } = await supabase
+          .from('documents')
+          .select(`
+            id,
+            name,
+            doc_type,
+            uploaded_at,
+            property_id,
+            properties!inner(
+              id,
+              name,
+              owner_id
+            )
+          `)
+          .eq('properties.owner_id', user.id)
+          .order('uploaded_at', { ascending: false })
+          .limit(10);
+
+        if (documentsError) {
+          console.warn('Error fetching documents:', documentsError);
+        }
+
+        // Fetch recent property images for gallery upload activities
+        const { data: propertyImagesData, error: propertyImagesError } = await supabase
+          .from('property_images')
+          .select(`
+            id,
+            image_name,
+            created_at,
+            properties!inner(
+              id,
+              name,
+              owner_id
+            )
+          `)
+          .eq('properties.owner_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (propertyImagesError) {
+          console.warn('Error fetching property images:', propertyImagesError);
+        }
+
+        // Fetch recent maintenance requests
+        const { data: maintenanceData, error: maintenanceError } = await supabase
+          .from('maintenance_requests')
+          .select(`
+            id,
+            description,
+            status,
+            created_at,
+            properties!inner(
+              id,
+              name,
+              owner_id
+            ),
+            tenants(
+              name
+            )
+          `)
+          .eq('properties.owner_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (maintenanceError) {
+          console.warn('Error fetching maintenance requests:', maintenanceError);
+        }
+
+        // Fetch recent communication logs
+        const { data: communicationData, error: communicationError } = await supabase
+          .from('communication_log')
+          .select(`
+            id,
+            mode,
+            message,
+            sent_at,
+            properties!inner(
+              id,
+              name,
+              owner_id
+            ),
+            tenants(
+              name
+            )
+          `)
+          .eq('properties.owner_id', user.id)
+          .order('sent_at', { ascending: false })
+          .limit(10);
+
+        if (communicationError) {
+          console.warn('Error fetching communication logs:', communicationError);
+        }
+
+        // Fetch recent rental increases
+        const { data: rentalIncreasesData, error: rentalIncreasesError } = await supabase
+          .from('rental_increases')
+          .select(`
+            id,
+            old_rent,
+            new_rent,
+            effective_date,
+            created_at,
+            leases!inner(
+              id,
+              properties!inner(
+                id,
+                name,
+                owner_id
+              ),
+              tenants(
+                name
+              )
+            )
+          `)
+          .eq('leases.properties.owner_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (rentalIncreasesError) {
+          console.warn('Error fetching rental increases:', rentalIncreasesError);
         }
 
         // Generate activities from recent payments and properties
@@ -222,22 +327,22 @@ export const Dashboard: React.FC = () => {
               id: `payment-${payment.id}`,
               type: 'payment',
               message: `${paymentTypeText} payment received from ${tenant} - ₹${payment.payment_amount.toLocaleString()}`,
-              time: getRelativeTime(activityTime),
+              time: getRecentActivityTime(activityTime),
               timestamp: new Date(activityTime).getTime(),
               status: payment.status === 'completed' ? 'success' : 'warning'
             });
           });
         }
 
-        // Add property creation activities
+        // Add property creation activities (show all recent properties, not just first 3)
         if (properties && properties.length > 0) {
-          properties.slice(0, 3).forEach(prop => {
+          properties.forEach(prop => {
             if (prop.created_at) {
               recentActivities.push({
                 id: `property-${prop.id}`,
                 type: 'document',
                 message: `Property "${prop.name}" was added`,
-                time: getRelativeTime(prop.created_at),
+                time: getRecentActivityTime(prop.created_at),
                 timestamp: new Date(prop.created_at).getTime(),
                 status: 'info'
               });
@@ -260,7 +365,7 @@ export const Dashboard: React.FC = () => {
                 id: `property-deleted-${prop.id}`,
                 type: 'document',
                 message: `Property "${prop.name}" was deleted`,
-                time: getRelativeTime(prop.updated_at),
+                time: getRecentActivityTime(prop.updated_at),
                 timestamp: new Date(prop.updated_at).getTime(),
                 status: 'warning'
               });
@@ -280,7 +385,7 @@ export const Dashboard: React.FC = () => {
                   id: `lease-created-${activeLease.id}`,
                   type: 'lease',
                   message: `Lease started for ${tenant} at "${prop.name}"`,
-                  time: getRelativeTime(activeLease.created_at),
+                  time: getRecentActivityTime(activeLease.created_at),
                   timestamp: new Date(activeLease.created_at).getTime(),
                   status: 'success'
                 });
@@ -308,16 +413,104 @@ export const Dashboard: React.FC = () => {
             // Add lease termination activities (for recently ended leases)
             const endedLeases = prop.leases?.filter((lease: any) => !lease.is_active && lease.updated_at);
             if (endedLeases && endedLeases.length > 0) {
-              endedLeases.slice(0, 2).forEach((lease: any) => {
+              endedLeases.forEach((lease: any) => {
                 const tenant = lease.tenants?.name || 'Unknown Tenant';
                 recentActivities.push({
                   id: `lease-ended-${lease.id}`,
                   type: 'lease',
                   message: `Lease ended for ${tenant} at "${prop.name}"`,
-                  time: getRelativeTime(lease.updated_at),
+                  time: getRecentActivityTime(lease.updated_at),
                   timestamp: new Date(lease.updated_at).getTime(),
                   status: 'warning'
                 });
+              });
+            }
+          });
+        }
+
+        // Add document upload activities
+        if (documentsData && documentsData.length > 0) {
+          documentsData.forEach((document) => {
+            if (document.uploaded_at) {
+              recentActivities.push({
+                id: `document-${document.id}`,
+                type: 'document',
+                message: `Document "${document.name}" uploaded to "${document.properties.name}"`,
+                time: getRecentActivityTime(document.uploaded_at),
+                timestamp: new Date(document.uploaded_at).getTime(),
+                status: 'info'
+              });
+            }
+          });
+        }
+
+        // Add gallery upload activities
+        if (propertyImagesData && propertyImagesData.length > 0) {
+          propertyImagesData.forEach((image) => {
+            if (image.created_at) {
+              recentActivities.push({
+                id: `gallery-${image.id}`,
+                type: 'gallery',
+                message: `Image "${image.image_name}" uploaded to "${image.properties.name}"`,
+                time: getRecentActivityTime(image.created_at),
+                timestamp: new Date(image.created_at).getTime(),
+                status: 'info'
+              });
+            }
+          });
+        }
+
+        // Add maintenance request activities
+        if (maintenanceData && maintenanceData.length > 0) {
+          maintenanceData.forEach((request) => {
+            if (request.created_at) {
+              const tenant = request.tenants?.name || 'Unknown Tenant';
+              recentActivities.push({
+                id: `maintenance-${request.id}`,
+                type: 'maintenance',
+                message: `Maintenance request from ${tenant} at "${request.properties.name}"`,
+                time: getRecentActivityTime(request.created_at),
+                timestamp: new Date(request.created_at).getTime(),
+                status: request.status === 'open' ? 'warning' : 'info'
+              });
+            }
+          });
+        }
+
+        // Add communication log activities
+        if (communicationData && communicationData.length > 0) {
+          communicationData.forEach((comm) => {
+            if (comm.sent_at) {
+              const tenant = comm.tenants?.name || 'Unknown Tenant';
+              const modeText = comm.mode === 'call' ? 'call' : 
+                              comm.mode === 'sms' ? 'SMS' : 
+                              comm.mode === 'email' ? 'email' : 
+                              comm.mode === 'app' ? 'app message' : comm.mode;
+              recentActivities.push({
+                id: `communication-${comm.id}`,
+                type: 'communication',
+                message: `${modeText.charAt(0).toUpperCase() + modeText.slice(1)} sent to ${tenant} at "${comm.properties.name}"`,
+                time: getRecentActivityTime(comm.sent_at),
+                timestamp: new Date(comm.sent_at).getTime(),
+                status: 'info'
+              });
+            }
+          });
+        }
+
+        // Add rental increase activities
+        if (rentalIncreasesData && rentalIncreasesData.length > 0) {
+          rentalIncreasesData.forEach((increase) => {
+            if (increase.created_at) {
+              const tenant = increase.leases?.tenants?.name || 'Unknown Tenant';
+              const propertyName = increase.leases?.properties?.name || 'Unknown Property';
+              recentActivities.push({
+                id: `rental-increase-${increase.id}`,
+                type: 'rental',
+                message: `Rent increased for ${tenant} at "${propertyName}" from ₹${increase.old_rent.toLocaleString()} to ₹${increase.new_rent.toLocaleString()}`,
+                time: getRecentActivityTime(increase.created_at),
+                timestamp: new Date(increase.created_at).getTime(),
+                status: 'warning'
               });
             }
           });
@@ -340,8 +533,8 @@ export const Dashboard: React.FC = () => {
     fetchData();
   }, [user?.id]);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     window.location.href = '/auth/login';
   };
 
@@ -378,6 +571,11 @@ export const Dashboard: React.FC = () => {
     const activeLease = prop.leases && prop.leases.length > 0 ?
       (prop.leases.find(lease => lease.is_active) || null) : null;
     const tenant = activeLease?.tenants || null;
+    
+    // Calculate lease status
+    const leaseStatus = activeLease?.end_date ? 
+      calculateLeaseStatus(activeLease.end_date) : 
+      { status: 'active', message: 'No Lease', daysRemaining: 0, priority: 1 };
 
     return {
       id: prop.id,
@@ -387,14 +585,11 @@ export const Dashboard: React.FC = () => {
       tenant: tenant?.name || 'Vacant',
       status: (prop.status as 'occupied' | 'vacant' | 'maintenance') || 'vacant',
       paymentStatus: getPaymentStatus(prop.id, activeLease) as 'paid' | 'pending' | 'overdue',
-      image: prop.images ? (() => {
-        try {
-          const parsed = JSON.parse(prop.images);
-          return Array.isArray(parsed) && parsed.length > 0 ? parsed[0] : '/placeholder-property.jpg';
-        } catch {
-          return '/placeholder-property.jpg';
-        }
-      })() : '/placeholder-property.jpg',
+      leaseStatus: leaseStatus,
+      image: prop.property_images && prop.property_images.length > 0 ? 
+        prop.property_images.find((img: any) => img.is_primary)?.image_url || 
+        prop.property_images[0]?.image_url || 
+        '/placeholder-property.jpg' : '/placeholder-property.jpg',
       dueDate: activeLease?.end_date || 'No lease',
       leases: prop.leases // Keep leases data for overdue calculation
     };
@@ -475,9 +670,12 @@ export const Dashboard: React.FC = () => {
     switch (type) {
       case 'payment': return <IndianRupee size={16} />;
       case 'lease': return <Calendar size={16} />;
-      case 'maintenance': return <AlertTriangle size={16} />;
+      case 'maintenance': return <Wrench size={16} />;
       case 'document': return <FileText size={16} />;
-      default: return <Bell size={16} />;
+      case 'gallery': return <Image size={16} />;
+      case 'communication': return <MessageSquare size={16} />;
+      case 'rental': return <DollarSign size={16} />;
+      default: return <MessageSquare size={16} />;
     }
   };
 
@@ -523,40 +721,8 @@ export const Dashboard: React.FC = () => {
 
             {/* User Menu */}
             <div className="flex items-center gap-4">
-              {/* Notifications */}
-              <div className="relative notifications-dropdown">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-                
-                {showNotifications && (
-                  <div className="absolute right-0 top-12 w-80 glass-card rounded-xl p-4 z-50">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="font-semibold text-glass">Notifications</h3>
-                      <button
-                        onClick={() => setShowNotifications(false)}
-                        className="p-1 hover:bg-white hover:bg-opacity-20 rounded transition-colors"
-                      >
-                        <X size={16} className="text-glass-muted" />
-                      </button>
-                    </div>
-                    <div className="space-y-2">
-                      {activities.slice(0, 3).map((activity) => (
-                        <div key={activity.id} className="p-2 glass rounded-lg">
-                          <p className="text-sm text-glass">{activity.message}</p>
-                          <p className="text-xs text-glass-muted mt-1">{activity.time}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               {/* User Menu */}
               <div className="flex items-center gap-2">
@@ -761,13 +927,20 @@ export const Dashboard: React.FC = () => {
                         className="w-full h-full"
                         fallbackText="No Image"
                       />
-                      <div className="absolute top-3 right-3 flex gap-2">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
-                          {property.status}
-                        </span>
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
-                          {property.paymentStatus}
-                        </span>
+                      <div className="absolute top-3 right-3 flex flex-col gap-2">
+                        <div className="flex gap-2">
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
+                            {property.status}
+                          </span>
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                            {property.paymentStatus}
+                          </span>
+                        </div>
+                        {property.leaseStatus && property.leaseStatus.status !== 'active' && (
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
+                            {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}
+                          </span>
+                        )}
                       </div>
                     </div>
                     

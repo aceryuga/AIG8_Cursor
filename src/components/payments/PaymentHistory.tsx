@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { 
   Building2, 
   LogOut, 
-  Bell, 
   HelpCircle, 
   User, 
   Plus, 
@@ -19,14 +18,17 @@ import {
   CreditCard,
   FileText,
   TrendingUp,
-  TrendingDown
+  TrendingDown,
+  RotateCcw
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
-import { calculateRentSummary, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
+import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
+import { PaymentService } from '../../services/paymentService';
 
 interface Payment {
   id: string;
@@ -42,6 +44,7 @@ interface Payment {
   paymentTypeDetails?: string;
   created_at?: string;
   updated_at?: string;
+  original_payment_id?: string;
   // Database fields
   payment_amount: number;
   payment_date: string;
@@ -83,15 +86,37 @@ export const PaymentHistory: React.FC = () => {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [showFilters, setShowFilters] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
-  const [showNotifications, setShowNotifications] = useState(false);
+  const [reversingPayment, setReversingPayment] = useState<string | null>(null);
+  const [showReverseConfirm, setShowReverseConfirm] = useState<string | null>(null);
   const itemsPerPage = 10;
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
+  };
+
+  const handleReversePayment = async (paymentId: string) => {
+    try {
+      setReversingPayment(paymentId);
+      
+      const success = await PaymentService.reversePayment(paymentId);
+      
+      if (success) {
+        // Refresh the payments list
+        window.location.reload();
+      } else {
+        throw new Error('Failed to reverse payment');
+      }
+    } catch (error: any) {
+      console.error('Error reversing payment:', error);
+      alert('Failed to reverse payment: ' + error.message);
+    } finally {
+      setReversingPayment(null);
+      setShowReverseConfirm(null);
+    }
   };
 
   // Fetch payments from Supabase
@@ -105,7 +130,11 @@ export const PaymentHistory: React.FC = () => {
       try {
         setLoading(true);
         
-        // First get user's properties with lease information (including inactive leases)
+        // Use centralized service to get filtered payments
+        const validPayments = await PaymentService.getUserPayments(user.id);
+
+        // Always calculate rent status even if no valid payments
+        // Get properties for rent calculation
         const { data: properties, error: propError } = await supabase
           .from('properties')
           .select(`
@@ -124,64 +153,68 @@ export const PaymentHistory: React.FC = () => {
           throw propError;
         }
 
-        if (!properties || properties.length === 0) {
+        // Calculate rent summary using only active leases
+        const activeLeases = properties?.flatMap(prop => 
+          prop.leases ? prop.leases.filter(lease => lease.is_active) : []
+        ) || [];
+        
+        const propertiesWithLeases: PropertyWithLease[] = activeLeases.map(lease => ({
+          id: lease.id,
+          lease_id: lease.id,
+          monthly_rent: lease.monthly_rent,
+          start_date: lease.start_date,
+          is_active: lease.is_active
+        }));
+
+        const rentPayments: RentPayment[] = validPayments.map(payment => ({
+          id: payment.id,
+          lease_id: payment.lease_id,
+          payment_date: payment.payment_date,
+          payment_amount: payment.payment_amount,
+          status: payment.status as 'completed' | 'pending' | 'failed'
+        }));
+
+        // Calculate overdue and pending amounts using same logic as Dashboard
+        const overdueProperties = propertiesWithLeases.filter(prop => {
+          const rentStatus = calculateRentStatus(prop, rentPayments);
+          return rentStatus.status === 'overdue';
+        });
+
+        const pendingProperties = propertiesWithLeases.filter(prop => {
+          const rentStatus = calculateRentStatus(prop, rentPayments);
+          return rentStatus.status === 'pending';
+        });
+
+        const pendingAmount = pendingProperties.reduce((sum, prop) => {
+          const rentStatus = calculateRentStatus(prop, rentPayments);
+          return sum + rentStatus.amount;
+        }, 0);
+
+        const overdueAmount = overdueProperties.reduce((sum, prop) => {
+          const rentStatus = calculateRentStatus(prop, rentPayments);
+          return sum + rentStatus.amount;
+        }, 0);
+
+        // Calculate total collected from actual payments
+        const totalCollected = rentPayments
+          .filter(p => p.status === 'completed')
+          .reduce((sum, p) => sum + p.payment_amount, 0);
+
+        if (validPayments.length === 0) {
           setPayments([]);
           setSummary({
-            totalCollected: 0,
-            totalPending: 0,
-            totalOverdue: 0,
+            totalCollected,
+            totalPending: pendingAmount,
+            totalOverdue: overdueAmount,
             paymentsThisMonth: 0,
             collectionRate: 0
           });
           setLoading(false);
           return;
-        }
-
-        // Get all lease IDs from properties (both active and inactive)
-        const allLeaseIds = properties.flatMap(prop => 
-          prop.leases ? prop.leases.map(lease => lease.id) : []
-        );
-
-        if (allLeaseIds.length === 0) {
-          setPayments([]);
-          setSummary({
-            totalCollected: 0,
-            totalPending: 0,
-            totalOverdue: 0,
-            paymentsThisMonth: 0,
-            collectionRate: 0
-          });
-          setLoading(false);
-          return;
-        }
-
-        // Fetch payments with related data (from all leases)
-        const { data: paymentsData, error: paymentsError } = await supabase
-          .from('payments')
-          .select(`
-            *,
-            leases!inner(
-              id,
-              property_id,
-              is_active,
-              properties(
-                id,
-                name
-              ),
-              tenants(
-                name
-              )
-            )
-          `)
-          .in('lease_id', allLeaseIds)
-          .order('payment_date', { ascending: false });
-
-        if (paymentsError) {
-          throw paymentsError;
         }
 
         // Transform the data to match our interface
-        const transformedPayments: Payment[] = (paymentsData || []).map(payment => ({
+        const transformedPayments: Payment[] = validPayments.map(payment => ({
           id: payment.id,
           propertyName: payment.leases?.properties?.name || 'Unknown Property',
           tenant: payment.leases?.tenants?.name || 'Unknown Tenant',
@@ -195,6 +228,7 @@ export const PaymentHistory: React.FC = () => {
           paymentTypeDetails: payment.payment_type_details || '',
           created_at: payment.created_at,
           updated_at: payment.updated_at,
+          original_payment_id: payment.original_payment_id,
           // Keep database fields for compatibility
           payment_amount: payment.payment_amount,
           payment_date: payment.payment_date,
@@ -203,30 +237,6 @@ export const PaymentHistory: React.FC = () => {
         }));
 
         setPayments(transformedPayments);
-
-        // Calculate rent summary using only active leases
-        const activeLeases = properties.flatMap(prop => 
-          prop.leases ? prop.leases.filter(lease => lease.is_active) : []
-        );
-        
-        const propertiesWithLeases: PropertyWithLease[] = activeLeases.map(lease => ({
-          id: lease.id, // Using lease ID as property ID for rent calculation
-          lease_id: lease.id,
-          monthly_rent: lease.monthly_rent,
-          start_date: lease.start_date,
-          is_active: lease.is_active
-        }));
-
-        const rentPayments: RentPayment[] = (paymentsData || []).map(payment => ({
-          id: payment.id,
-          lease_id: payment.lease_id,
-          payment_date: payment.payment_date,
-          payment_amount: payment.payment_amount,
-          status: payment.status as 'completed' | 'pending' | 'failed'
-        }));
-
-        // Calculate rent summary
-        const rentSummary = calculateRentSummary(propertiesWithLeases, rentPayments);
 
         // Calculate additional metrics for display
         const now = new Date();
@@ -244,9 +254,9 @@ export const PaymentHistory: React.FC = () => {
           : 0;
 
         setSummary({
-          totalCollected: rentSummary.totalCollected,
-          totalPending: rentSummary.totalPending,
-          totalOverdue: rentSummary.totalOverdue,
+          totalCollected,
+          totalPending: pendingAmount,
+          totalOverdue: overdueAmount,
           paymentsThisMonth,
           collectionRate
         });
@@ -263,6 +273,14 @@ export const PaymentHistory: React.FC = () => {
   }, [user?.id]);
 
   const filteredPayments = payments.filter(payment => {
+    // Hide payments that have been reversed or are reversals themselves
+    const isReversed = payments.some(p => p.original_payment_id === payment.id);
+    const isReversal = payment.original_payment_id !== null;
+    
+    if (isReversed || isReversal) {
+      return false;
+    }
+    
     const matchesSearch = payment.propertyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          payment.tenant.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          payment.reference.toLowerCase().includes(searchTerm.toLowerCase());
@@ -379,17 +397,8 @@ export const PaymentHistory: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
@@ -688,8 +697,27 @@ export const PaymentHistory: React.FC = () => {
                     </td>
                     <td className="p-4">
                       <div className="flex gap-2">
-                        <Button variant="ghost" size="sm" className="p-1">
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="p-1"
+                          title="View Details"
+                        >
                           <FileText size={14} />
+                        </Button>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="p-1 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => setShowReverseConfirm(payment.id)}
+                          disabled={reversingPayment === payment.id}
+                          title="Reverse Payment"
+                        >
+                          {reversingPayment === payment.id ? (
+                            <Clock size={14} className="animate-spin" />
+                          ) : (
+                            <RotateCcw size={14} />
+                          )}
                         </Button>
                       </div>
                     </td>
@@ -747,6 +775,51 @@ export const PaymentHistory: React.FC = () => {
             <Link to="/payments/record">
               <Button>Record Payment</Button>
             </Link>
+          </div>
+        )}
+
+        {/* Reverse Payment Confirmation Dialog */}
+        {showReverseConfirm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="glass-card rounded-xl p-6 max-w-md w-full mx-4">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 glass rounded-full flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-orange-600" />
+                </div>
+                <h3 className="text-lg font-semibold text-glass">Reverse Payment</h3>
+              </div>
+              
+              <p className="text-glass-muted mb-6">
+                Are you sure you want to reverse this payment? This action will create a negative payment record and both the original and reversed payments will be hidden from the payment history.
+              </p>
+              
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowReverseConfirm(null)}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => handleReversePayment(showReverseConfirm)}
+                  className="flex-1 bg-red-600 hover:bg-red-700"
+                  disabled={reversingPayment === showReverseConfirm}
+                >
+                  {reversingPayment === showReverseConfirm ? (
+                    <>
+                      <Clock size={16} className="animate-spin mr-2" />
+                      Reversing...
+                    </>
+                  ) : (
+                    <>
+                      <RotateCcw size={16} className="mr-2" />
+                      Reverse Payment
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
           </div>
         )}
       </main>

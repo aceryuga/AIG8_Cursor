@@ -17,12 +17,12 @@ import {
   Trash2,
   X,
   LogOut,
-  Bell,
   HelpCircle,
   User
 } from 'lucide-react';
 import { Button } from '../components/webapp-ui/Button';
 import { Input } from '../components/webapp-ui/Input';
+import { NotificationBell } from '../components/ui/NotificationBell';
 import { ImageWithFallback } from '../components/ui/ImageWithFallback';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
@@ -60,7 +60,6 @@ export const Gallery: React.FC = () => {
   const [showAlbumView, setShowAlbumView] = useState(false);
   const [filteredAlbums, setFilteredAlbums] = useState<PropertyAlbum[]>([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
@@ -281,8 +280,8 @@ export const Gallery: React.FC = () => {
     setSelectedFiles(prev => [...prev, ...imageFiles]);
   };
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
   };
 
   // Filter albums based on search term
@@ -479,17 +478,8 @@ export const Gallery: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
@@ -733,10 +723,21 @@ export const Gallery: React.FC = () => {
                     multiple
                     accept="image/*"
                     onChange={handleFileSelect}
-                    className="hidden"
+                    style={{ display: 'none' }}
                     ref={fileInputRef}
                   />
-                  <Button variant="outline">
+                  <Button 
+                    variant="outline"
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (fileInputRef.current) {
+                        fileInputRef.current.click();
+                      }
+                    }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
                     Choose Images
                   </Button>
                 </div>

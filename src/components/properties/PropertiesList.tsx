@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Phone, Mail, Building2, LogOut, Bell, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2 } from 'lucide-react';
+import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Phone, Mail, Building2, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
+import { calculateLeaseStatus, getLeaseStatusColor, getLeaseStatusIcon } from '../../utils/leaseStatus';
 import { createPropertyAuditEvent, createLeaseAuditEvent } from '../../utils/auditTrail';
+import { updatePropertyCountInSettings } from '../../utils/settingsUtils';
 import { ImageWithFallback } from '../ui/ImageWithFallback';
+import { NotificationBell } from '../ui/NotificationBell';
+import { PaymentService } from '../../services/paymentService';
 
 interface Property {
   id: string;
@@ -19,6 +23,7 @@ interface Property {
   tenantEmail: string;
   status: 'occupied' | 'vacant' | 'maintenance';
   paymentStatus: 'paid' | 'pending' | 'overdue' | null;
+  leaseStatus?: any;
   image: string;
   dueDate: string;
   propertyType: 'apartment' | 'villa' | 'office' | 'shop';
@@ -63,7 +68,6 @@ export const PropertiesList: React.FC = () => {
   const [filterType, setFilterType] = useState<string>('all');
   const [sortBy, setSortBy] = useState<string>('name');
   const [showFilters, setShowFilters] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
@@ -81,7 +85,7 @@ export const PropertiesList: React.FC = () => {
       try {
         setLoading(true);
         setError(null);
-
+        
         const { data, error: fetchError } = await supabase
           .from('properties')
           .select(`
@@ -99,6 +103,11 @@ export const PropertiesList: React.FC = () => {
                 phone,
                 email
               )
+            ),
+            property_images!left(
+              id,
+              image_url,
+              is_primary
             )
           `)
           .eq('owner_id', user.id)
@@ -110,36 +119,17 @@ export const PropertiesList: React.FC = () => {
 
         setSupabaseProperties(data || []);
 
-        // Fetch payments for rent status calculation
-        const { data: paymentsData, error: paymentsError } = await supabase
-          .from('payments')
-          .select(`
-            *,
-            leases!inner(
-              id,
-              property_id,
-              is_active,
-              properties(
-                id,
-                name
-              )
-            )
-          `)
-          .in('leases.property_id', (data || []).map(p => p.id))
-          .eq('leases.is_active', true);
+        // Fetch payments for rent status calculation using centralized service
+        const validPayments = await PaymentService.getPaymentsForProperties((data || []).map(p => p.id));
 
-        if (paymentsError) {
-          console.warn('Error fetching payments:', paymentsError);
-        } else {
-          const rentPayments: RentPayment[] = (paymentsData || []).map(payment => ({
-            id: payment.id,
-            lease_id: (payment.leases as any)?.id || '',
-            payment_date: payment.payment_date,
-            payment_amount: payment.payment_amount,
-            status: payment.status as 'completed' | 'pending' | 'failed'
-          }));
-          setPayments(rentPayments);
-        }
+        const rentPayments: RentPayment[] = validPayments.map(payment => ({
+          id: payment.id,
+          lease_id: (payment.leases as any)?.id || '',
+          payment_date: payment.payment_date,
+          payment_amount: payment.payment_amount,
+          status: payment.status as 'completed' | 'pending' | 'failed'
+        }));
+        setPayments(rentPayments);
       } catch (err: any) {
         console.error('Error fetching properties:', err);
         setError(err.message || 'Failed to load properties');
@@ -177,6 +167,11 @@ export const PropertiesList: React.FC = () => {
           
         }
         
+        // Calculate lease status
+        const leaseStatus = activeLease?.end_date ? 
+          calculateLeaseStatus(activeLease.end_date) : 
+          { status: 'active', message: 'No Lease', daysRemaining: 0, priority: 1 };
+        
         return {
           id: prop.id,
           name: prop.name || 'Unnamed Property',
@@ -187,14 +182,11 @@ export const PropertiesList: React.FC = () => {
           tenantEmail: tenant?.email || '',
           status: (prop.status as 'occupied' | 'vacant' | 'maintenance') || 'vacant',
           paymentStatus,
-          image: prop.images ? (() => {
-            try {
-              const parsed = JSON.parse(prop.images);
-              return Array.isArray(parsed) && parsed.length > 0 ? parsed[0] : '/placeholder-property.jpg';
-            } catch {
-              return '/placeholder-property.jpg';
-            }
-          })() : '/placeholder-property.jpg',
+          leaseStatus,
+          image: prop.property_images && prop.property_images.length > 0 ? 
+            prop.property_images.find((img: any) => img.is_primary)?.image_url || 
+            prop.property_images[0]?.image_url || 
+            '/placeholder-property.jpg' : '/placeholder-property.jpg',
           dueDate: activeLease?.end_date || 'No lease',
           propertyType: (prop.property_type as 'apartment' | 'villa' | 'office' | 'shop') || 'apartment',
           bedrooms: prop.bedrooms || 1,
@@ -296,6 +288,11 @@ export const PropertiesList: React.FC = () => {
       setProperties(prev => prev.filter(p => p.id !== id));
       setSupabaseProperties(prev => prev.filter(p => p.id !== id));
       
+      // 4) Update property count in user settings
+      if (user?.id) {
+        await updatePropertyCountInSettings(user.id);
+      }
+      
       console.log('Property set inactive and leases ended with updated timestamps and audit trail');
     } catch (err: any) {
       console.error('Error soft-deleting property:', err);
@@ -303,8 +300,8 @@ export const PropertiesList: React.FC = () => {
     }
   };
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
@@ -358,13 +355,20 @@ export const PropertiesList: React.FC = () => {
           className="w-full h-full"
           fallbackText="No Image"
         />
-        <div className="absolute top-3 right-3 flex gap-2">
-          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
-            {property.status}
-          </span>
-          {property.paymentStatus && (
-            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
-              {property.paymentStatus}
+        <div className="absolute top-3 right-3 flex flex-col gap-2">
+          <div className="flex gap-2">
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
+              {property.status}
+            </span>
+            {property.paymentStatus && (
+              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                {property.paymentStatus}
+              </span>
+            )}
+          </div>
+          {property.leaseStatus && property.leaseStatus.status !== 'active' && (
+            <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
+              {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}
             </span>
           )}
         </div>
@@ -451,13 +455,20 @@ export const PropertiesList: React.FC = () => {
                 {property.address}
               </p>
             </div>
-            <div className="flex gap-2">
-              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
-                {property.status}
-              </span>
-              {property.paymentStatus && (
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
-                  {property.paymentStatus}
+            <div className="flex flex-col gap-2">
+              <div className="flex gap-2">
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
+                  {property.status}
+                </span>
+                {property.paymentStatus && (
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                    {property.paymentStatus}
+                  </span>
+                )}
+              </div>
+              {property.leaseStatus && property.leaseStatus.status !== 'active' && (
+                <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
+                  {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}
                 </span>
               )}
             </div>
@@ -554,17 +565,8 @@ export const PropertiesList: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
