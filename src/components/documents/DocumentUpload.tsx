@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
 import { uploadDocument, fetchUserDocuments, DocumentMetadata } from '../../utils/documentUpload';
 import { supabase } from '../../lib/supabase';
@@ -63,7 +64,6 @@ const docTypes = [
 export const DocumentUpload: React.FC = () => {
   const [uploadFiles, setUploadFiles] = useState<UploadFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadComplete, setUploadComplete] = useState(false);
   const [properties, setProperties] = useState<Property[]>([]);
@@ -72,8 +72,8 @@ export const DocumentUpload: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
@@ -287,6 +287,7 @@ export const DocumentUpload: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -305,17 +306,8 @@ export const DocumentUpload: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>

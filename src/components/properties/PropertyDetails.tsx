@@ -1,14 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, Building2, LogOut, Bell, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Save, AlertCircle } from 'lucide-react';
+import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, Building2, LogOut, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Save, AlertCircle } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
-import { getRelativeTime } from '../../utils/timezoneUtils';
+import { getRelativeTime, formatDateDDMMYYYY, fromDateInput, getCurrentISTDateInput } from '../../utils/timezoneUtils';
+import { calculateLeaseStatus, getLeaseStatusColor, getLeaseStatusIcon } from '../../utils/leaseStatus';
 import { uploadDocument, fetchPropertyDocuments, softDeleteDocument } from '../../utils/documentUpload';
+import { updatePropertyCountInSettings } from '../../utils/settingsUtils';
 import { ImageWithFallback } from '../ui/ImageWithFallback';
+import { PropertyGallery } from './PropertyGallery';
+import { PropertyImage } from '../../utils/propertyImages';
+import { PaymentService } from '../../services/paymentService';
 
 interface Property {
   id: string;
@@ -20,6 +25,7 @@ interface Property {
   tenantEmail: string;
   status: 'occupied' | 'vacant' | 'maintenance';
   paymentStatus: 'paid' | 'pending' | 'overdue';
+  leaseStatus?: any;
   image: string;
   dueDate: string;
   propertyType: 'apartment' | 'villa' | 'office' | 'shop';
@@ -48,6 +54,8 @@ interface PaymentForm {
   method: 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'card' | '';
   reference: string;
   notes: string;
+  paymentType: 'Rent' | 'Maintenance' | 'Security Deposit' | 'Other';
+  paymentTypeDetails: string;
 }
 
 interface ContactForm {
@@ -61,7 +69,14 @@ interface EditPropertyForm {
   address: string;
   rent: number;
   securityDeposit: number;
+  maintenanceCharges: number;
   description: string;
+  amenities: string[];
+  tenantName: string;
+  tenantPhone: string;
+  tenantEmail: string;
+  leaseStart: string;
+  leaseEnd: string;
 }
 
 interface Document {
@@ -84,16 +99,21 @@ const docTypes = [
   { id: 'other', name: 'Other' }
 ];
 
+const availableAmenities = [
+  'Parking', 'Security', 'Gym', 'Swimming Pool', 'Garden', 'Power Backup',
+  'Elevator', 'Balcony', 'Air Conditioning', 'Furnished', 'Internet', 'Clubhouse'
+];
+
 
 export const PropertyDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [activeTab, setActiveTab] = useState('overview');
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showRecordPayment, setShowRecordPayment] = useState(false);
   const [showContactTenant, setShowContactTenant] = useState(false);
   const [showUploadDocument, setShowUploadDocument] = useState(false);
-  const [showEditProperty, setShowEditProperty] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showDeleteTenantConfirm, setShowDeleteTenantConfirm] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
   
   // Supabase data states
   const [property, setProperty] = useState<Property | null>(null);
@@ -105,11 +125,13 @@ export const PropertyDetails: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [paymentForm, setPaymentForm] = useState<PaymentForm>({
-    amount: 15000,
-    date: new Date().toISOString().split('T')[0], // Local date for input
+    amount: 0,
+    date: getCurrentISTDateInput(), // Current date in IST for input
     method: '',
     reference: '',
-    notes: ''
+    notes: '',
+    paymentType: 'Rent',
+    paymentTypeDetails: ''
   });
   const [contactForm, setContactForm] = useState<ContactForm>({
     subject: '',
@@ -121,13 +143,24 @@ export const PropertyDetails: React.FC = () => {
     address: '',
     rent: 0,
     securityDeposit: 0,
-    description: ''
+    maintenanceCharges: 0,
+    description: '',
+    amenities: [],
+    tenantName: '',
+    tenantPhone: '',
+    tenantEmail: '',
+    leaseStart: '',
+    leaseEnd: ''
   });
+  const [originalProperty, setOriginalProperty] = useState<Property | null>(null);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
   const [uploading, setUploading] = useState(false);
   const [selectedDocType, setSelectedDocType] = useState<string>('other');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Property images state for synchronization
+  const [propertyImages, setPropertyImages] = useState<PropertyImage[]>([]);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -139,6 +172,79 @@ export const PropertyDetails: React.FC = () => {
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Fetch property images
+  const fetchPropertyImages = async () => {
+    if (!property?.id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('property_images')
+        .select('*')
+        .eq('property_id', property.id)
+        .order('is_primary', { ascending: false })
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('Error fetching property images:', error);
+      } else {
+        setPropertyImages(data || []);
+      }
+    } catch (err) {
+      console.warn('Error fetching property images:', err);
+    }
+  };
+
+  // Update property image based on primary image from gallery
+  const updatePropertyImageFromGallery = () => {
+    if (propertyImages.length > 0) {
+      const primaryImage = propertyImages.find(img => img.is_primary);
+      if (primaryImage && property?.image !== primaryImage.image_url) {
+        setProperty(prev => prev ? {
+          ...prev,
+          image: primaryImage.image_url
+        } : null);
+      }
+    } else if (property?.image !== '/placeholder-currentProperty.jpg') {
+      // No images in gallery, set to placeholder
+      setProperty(prev => prev ? {
+        ...prev,
+        image: '/placeholder-currentProperty.jpg'
+      } : null);
+    }
+  };
+
+  // Function to fetch payment data using centralized service
+  const fetchPaymentData = async () => {
+    if (!id) return;
+    
+    try {
+      const validPayments = await PaymentService.getPaymentsForProperty(id);
+
+      const formattedPayments: PaymentHistory[] = validPayments.map(payment => ({
+        id: payment.id,
+        date: payment.payment_date,
+        amount: payment.payment_amount,
+        status: payment.status === 'completed' ? 'paid' : payment.status as 'pending' | 'overdue',
+        method: payment.payment_method,
+        reference: payment.reference || ''
+      }));
+      setPayments(formattedPayments);
+
+      // Also store rent payments for status calculation
+      const rentPaymentsData: RentPayment[] = validPayments.map(payment => ({
+        id: payment.id,
+        lease_id: (payment.leases as any)?.id || '',
+        payment_date: payment.payment_date,
+        payment_amount: payment.payment_amount,
+        status: payment.status as 'completed' | 'pending' | 'failed'
+      }));
+      
+      setRentPayments(rentPaymentsData);
+    } catch (err) {
+      console.warn('Error fetching payment data:', err);
+    }
   };
 
   // Fetch property data from Supabase
@@ -170,6 +276,11 @@ export const PropertyDetails: React.FC = () => {
                 phone,
                 email
               )
+            ),
+            property_images!left(
+              id,
+              image_url,
+              is_primary
             )
           `)
           .eq('id', id)
@@ -181,33 +292,37 @@ export const PropertyDetails: React.FC = () => {
         }
 
         if (data) {
-        const activeLease = data.leases && data.leases.length > 0 ? 
-          data.leases.find((lease: any) => lease.is_active) || data.leases[0] : null;
+          const activeLease = data.leases && data.leases.length > 0 ? 
+            data.leases.find((lease: any) => lease.is_active) : null;
           const tenant = activeLease?.tenants || null;
 
           // Store the lease ID for payment status calculation
           if (activeLease) {
             setLeaseId(activeLease.id);
+          } else {
+            setLeaseId('');
           }
+
+          // Calculate lease status
+          const leaseStatus = activeLease?.end_date ? 
+            calculateLeaseStatus(activeLease.end_date) : 
+            { status: 'active', message: 'No Lease', daysRemaining: 0, priority: 1 };
 
           const propertyData: Property = {
             id: data.id,
             name: data.name || 'Unnamed Property',
             address: data.address || 'Address not available',
             rent: activeLease?.monthly_rent || 0,
-            tenant: tenant?.name || 'Vacant',
-            tenantPhone: tenant?.phone || '',
-            tenantEmail: tenant?.email || '',
+            tenant: activeLease && tenant?.name ? tenant.name : 'Vacant',
+            tenantPhone: activeLease && tenant?.phone ? tenant.phone : '',
+            tenantEmail: activeLease && tenant?.email ? tenant.email : '',
             status: (data.status as 'occupied' | 'vacant' | 'maintenance') || 'vacant',
             paymentStatus: 'pending' as const, // Will be calculated after payments are loaded
-            image: data.images ? (() => {
-              try {
-                const parsed = JSON.parse(data.images);
-                return Array.isArray(parsed) && parsed.length > 0 ? parsed[0] : '/placeholder-currentProperty.jpg';
-              } catch {
-                return '/placeholder-currentProperty.jpg';
-              }
-            })() : '/placeholder-currentProperty.jpg',
+            leaseStatus: leaseStatus,
+            image: data.property_images && data.property_images.length > 0 ? 
+              data.property_images.find((img: any) => img.is_primary)?.image_url || 
+              data.property_images[0]?.image_url || 
+              '/placeholder-currentProperty.jpg' : '/placeholder-currentProperty.jpg',
             dueDate: activeLease?.end_date || 'No lease',
             propertyType: (data.property_type as 'apartment' | 'villa' | 'office' | 'shop') || 'apartment',
             bedrooms: data.bedrooms || 1,
@@ -223,46 +338,29 @@ export const PropertyDetails: React.FC = () => {
           setProperty(propertyData);
         }
 
-        // Fetch payment history
-        const { data: paymentsData, error: paymentsError } = await supabase
-          .from('payments')
-          .select(`
-            *,
-            leases!inner(
-              id,
-              property_id,
-              is_active
-            )
-          `)
-          .eq('leases.property_id', id)
-          .eq('leases.is_active', true)
-          .order('payment_date', { ascending: false });
+        // Fetch payment history using centralized service
+        const validPayments = await PaymentService.getPaymentsForProperty(id);
 
-        if (paymentsError) {
-          console.warn('Error fetching payments:', paymentsError);
-        } else {
-          const formattedPayments: PaymentHistory[] = (paymentsData || []).map(payment => ({
-            id: payment.id,
-            date: payment.payment_date,
-            amount: payment.payment_amount,
-            status: payment.status === 'completed' ? 'paid' : payment.status as 'pending' | 'overdue',
-            method: payment.payment_method,
-            reference: payment.reference || ''
-          }));
-          setPayments(formattedPayments);
+        const formattedPayments: PaymentHistory[] = validPayments.map(payment => ({
+          id: payment.id,
+          date: payment.payment_date,
+          amount: payment.payment_amount,
+          status: payment.status === 'completed' ? 'paid' : payment.status as 'pending' | 'overdue',
+          method: payment.payment_method,
+          reference: payment.reference || ''
+        }));
+        setPayments(formattedPayments);
 
-          // Also store rent payments for status calculation
-          const rentPaymentsData: RentPayment[] = (paymentsData || []).map(payment => ({
-            id: payment.id,
-            lease_id: (payment.leases as any)?.id || '',
-            payment_date: payment.payment_date,
-            payment_amount: payment.payment_amount,
-            status: payment.status as 'completed' | 'pending' | 'failed'
-          }));
-          
-          
-          setRentPayments(rentPaymentsData);
-        }
+        // Also store rent payments for status calculation
+        const rentPaymentsData: RentPayment[] = validPayments.map(payment => ({
+          id: payment.id,
+          lease_id: (payment.leases as any)?.id || '',
+          payment_date: payment.payment_date,
+          payment_amount: payment.payment_amount,
+          status: payment.status as 'completed' | 'pending' | 'failed'
+        }));
+        
+        setRentPayments(rentPaymentsData);
 
         // Fetch documents using the new utility
         try {
@@ -305,6 +403,18 @@ export const PropertyDetails: React.FC = () => {
     fetchProperty();
   }, [id, user?.id]);
 
+  // Fetch property images when property is loaded and sync with property image
+  useEffect(() => {
+    if (property?.id) {
+      fetchPropertyImages();
+    }
+  }, [property?.id]);
+
+  // Sync property image with gallery primary image when images change
+  useEffect(() => {
+    updatePropertyImageFromGallery();
+  }, [propertyImages]);
+
 
   // Calculate payment status when lease and payments data are available
   useEffect(() => {
@@ -329,8 +439,17 @@ export const PropertyDetails: React.FC = () => {
     }
   }, [leaseId, rentPayments, property?.id, property?.rent, property?.leaseStart, property?.status]);
 
-  const handleLogout = () => {
-    logout();
+  // Handle leaseId when property status changes
+  useEffect(() => {
+    if (property) {
+      if (property.status === 'vacant' || property.tenant === 'Vacant') {
+        setLeaseId('');
+      }
+    }
+  }, [property?.status, property?.tenant]);
+
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
@@ -397,11 +516,65 @@ export const PropertyDetails: React.FC = () => {
   };
 
   const handleRecordPayment = async () => {
+    if (!paymentForm.amount || !paymentForm.date || !paymentForm.method) {
+      alert('Please fill in all required fields');
+      return;
+    }
+
+    if (paymentForm.paymentType === 'Other' && !paymentForm.paymentTypeDetails.trim()) {
+      alert('Please provide payment details when "Other" is selected');
+      return;
+    }
+
     setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setLoading(false);
-    setShowRecordPayment(false);
-    alert('Payment recorded successfully!');
+    
+    try {
+      if (!leaseId) {
+        throw new Error('No active lease found for this property');
+      }
+
+      // Insert payment into Supabase
+      const { error } = await supabase
+        .from('payments')
+        .insert({
+          lease_id: leaseId,
+          payment_amount: paymentForm.amount,
+          payment_date: fromDateInput(paymentForm.date), // Convert to UTC for storage
+          payment_method: paymentForm.method,
+          reference: paymentForm.reference || null,
+          notes: paymentForm.notes || null,
+          payment_type: paymentForm.paymentType,
+          payment_type_details: paymentForm.paymentType === 'Other' ? paymentForm.paymentTypeDetails : null,
+          status: 'completed'
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      // Reset form
+      setPaymentForm({
+        amount: 0,
+        date: getCurrentISTDateInput(), // Current date in IST for input
+        method: '',
+        reference: '',
+        notes: '',
+        paymentType: 'Rent',
+        paymentTypeDetails: ''
+      });
+
+      setLoading(false);
+      setShowRecordPayment(false);
+      
+      // Refresh payment data
+      await fetchPaymentData();
+      
+      alert('Payment recorded successfully!');
+    } catch (err: any) {
+      console.error('Error recording payment:', err);
+      alert('Failed to record payment: ' + err.message);
+      setLoading(false);
+    }
   };
 
   const handleContactTenant = async () => {
@@ -489,22 +662,192 @@ export const PropertyDetails: React.FC = () => {
     }
   };
 
-  const handleEditProperty = async () => {
+
+  const handleEnterEditMode = () => {
+    if (!property) return;
+    
+    // Store original property data for cancel functionality
+    setOriginalProperty({ ...property });
+    
+    // Populate edit form with current property data
+    setEditForm({
+      name: property.name,
+      address: property.address,
+      rent: property.rent,
+      securityDeposit: property.securityDeposit,
+      maintenanceCharges: property.maintenanceCharges || 0,
+      description: property.description,
+      amenities: property.amenities || [],
+      tenantName: property.tenant || '',
+      tenantPhone: property.tenantPhone || '',
+      tenantEmail: property.tenantEmail || '',
+      leaseStart: property.leaseStart || '',
+      leaseEnd: property.leaseEnd || ''
+    });
+    
+    setIsEditMode(true);
+  };
+
+  const handleSaveChanges = async () => {
     if (!property) return;
     
     setLoading(true);
     try {
-      const { error } = await supabase
+      // Update property details
+      const { error: propError } = await supabase
         .from('properties')
         .update({
           name: editForm.name,
           address: editForm.address,
-          description: editForm.description
+          description: editForm.description,
+          amenities: editForm.amenities.join(',')
         })
         .eq('id', property.id);
 
-      if (error) {
-        throw error;
+      if (propError) {
+        throw propError;
+      }
+
+      // Update lease details if there's an active lease
+      if (leaseId) {
+        // Create timestamp in local timezone format for updated_at
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const seconds = String(now.getSeconds()).padStart(2, '0');
+        const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+        
+        const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+
+        const { error: leaseError } = await supabase
+          .from('leases')
+          .update({
+            monthly_rent: editForm.rent,
+            security_deposit: editForm.securityDeposit,
+            maintenance_charges: editForm.maintenanceCharges,
+            start_date: editForm.leaseStart,
+            end_date: editForm.leaseEnd,
+            updated_at: currentTime
+          })
+          .eq('id', leaseId)
+          .eq('is_active', true);
+
+        if (leaseError) {
+          console.warn('Error updating lease:', leaseError);
+        }
+      }
+
+      // Handle tenant management
+      if (editForm.tenantName.trim()) {
+        // Check if there's already an active lease
+        if (leaseId) {
+          // Update existing tenant
+          const { data: leaseData, error: leaseFetchError } = await supabase
+            .from('leases')
+            .select('tenant_id')
+            .eq('id', leaseId)
+            .eq('is_active', true)
+            .single();
+
+          if (!leaseFetchError && leaseData?.tenant_id) {
+            const { error: tenantError } = await supabase
+              .from('tenants')
+              .update({
+                name: editForm.tenantName,
+                phone: editForm.tenantPhone,
+                email: editForm.tenantEmail
+              })
+              .eq('id', leaseData.tenant_id);
+
+            if (tenantError) {
+              console.warn('Error updating tenant:', tenantError);
+            }
+          }
+        } else {
+          // Create new tenant and lease
+          const tenantId = crypto.randomUUID();
+          const newLeaseId = crypto.randomUUID();
+          
+          // Create timestamp in local timezone format
+          const now = new Date();
+          const year = now.getFullYear();
+          const month = String(now.getMonth() + 1).padStart(2, '0');
+          const day = String(now.getDate()).padStart(2, '0');
+          const hours = String(now.getHours()).padStart(2, '0');
+          const minutes = String(now.getMinutes()).padStart(2, '0');
+          const seconds = String(now.getSeconds()).padStart(2, '0');
+          const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+          
+          const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+
+          // Create tenant
+          const { error: tenantError } = await supabase
+            .from('tenants')
+            .insert({
+              id: tenantId,
+              name: editForm.tenantName,
+              phone: editForm.tenantPhone,
+              email: editForm.tenantEmail,
+              current_property_id: property.id,
+            });
+
+          if (tenantError) {
+            console.warn('Error creating tenant:', tenantError);
+          } else {
+            // Create lease
+            const { error: leaseError } = await supabase
+              .from('leases')
+              .insert({
+                id: newLeaseId,
+                property_id: property.id,
+                tenant_id: tenantId,
+                start_date: editForm.leaseStart,
+                end_date: editForm.leaseEnd,
+                monthly_rent: editForm.rent,
+                security_deposit: editForm.securityDeposit,
+                maintenance_charges: editForm.maintenanceCharges,
+                is_active: true,
+                created_at: currentTime,
+                updated_at: currentTime
+              });
+
+            if (leaseError) {
+              console.warn('Error creating lease:', leaseError);
+            } else {
+              // Update property status to occupied
+              await supabase
+                .from('properties')
+                .update({ status: 'occupied' })
+                .eq('id', property.id);
+            }
+          }
+        }
+      } else if (leaseId) {
+        // If tenant name is empty but there's a lease, deactivate the lease
+        const { error: leaseError } = await supabase
+          .from('leases')
+          .update({ 
+            is_active: false,
+            end_date: fromDateInput(getCurrentISTDateInput()) // Convert to UTC for storage
+          })
+          .eq('id', leaseId)
+          .eq('is_active', true);
+
+        if (leaseError) {
+          console.warn('Error deactivating lease:', leaseError);
+        } else {
+          // Update property status to vacant
+          await supabase
+            .from('properties')
+            .update({ status: 'vacant' })
+            .eq('id', property.id);
+          
+          // Reset leaseId since the lease is now inactive
+          setLeaseId('');
+        }
       }
 
       // Update the property state
@@ -512,10 +855,21 @@ export const PropertyDetails: React.FC = () => {
         ...prev,
         name: editForm.name,
         address: editForm.address,
-        description: editForm.description
+        description: editForm.description,
+        rent: editForm.rent,
+        securityDeposit: editForm.securityDeposit,
+        maintenanceCharges: editForm.maintenanceCharges,
+        amenities: editForm.amenities,
+        tenant: editForm.tenantName.trim() ? editForm.tenantName : 'Vacant',
+        tenantPhone: editForm.tenantName.trim() ? editForm.tenantPhone : '',
+        tenantEmail: editForm.tenantName.trim() ? editForm.tenantEmail : '',
+        leaseStart: editForm.tenantName.trim() ? editForm.leaseStart : '',
+        leaseEnd: editForm.tenantName.trim() ? editForm.leaseEnd : '',
+        status: editForm.tenantName.trim() ? 'occupied' : 'vacant'
       } : null);
 
-      setShowEditProperty(false);
+      setIsEditMode(false);
+      setOriginalProperty(null);
       alert('Property updated successfully!');
     } catch (err: any) {
       console.error('Error updating property:', err);
@@ -523,6 +877,44 @@ export const PropertyDetails: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCancelEdit = () => {
+    if (originalProperty) {
+      setProperty(originalProperty);
+      // Reset leaseId to match the original property state
+      if (originalProperty.tenant && originalProperty.tenant !== 'Vacant') {
+        // If there was a tenant, we need to fetch the lease ID again
+        // This will be handled by the useEffect that watches for property changes
+      } else {
+        setLeaseId('');
+      }
+    }
+    setIsEditMode(false);
+    setOriginalProperty(null);
+    setEditForm({
+      name: '',
+      address: '',
+      rent: 0,
+      securityDeposit: 0,
+      maintenanceCharges: 0,
+      description: '',
+      amenities: [],
+      tenantName: '',
+      tenantPhone: '',
+      tenantEmail: '',
+      leaseStart: '',
+      leaseEnd: ''
+    });
+  };
+
+  const handleAmenityToggle = (amenity: string) => {
+    setEditForm(prev => ({
+      ...prev,
+      amenities: prev.amenities.includes(amenity)
+        ? prev.amenities.filter(a => a !== amenity)
+        : [...prev.amenities, amenity]
+    }));
   };
 
   const handleDeleteProperty = async () => {
@@ -573,12 +965,87 @@ export const PropertyDetails: React.FC = () => {
         console.warn('Error ending leases:', leaseError);
       }
 
+      // Update property count in user settings
+      if (user?.id) {
+        await updatePropertyCountInSettings(user.id);
+      }
+
       setShowDeleteConfirm(false);
       alert('Property deactivated successfully!');
       navigate('/properties');
     } catch (err: any) {
       console.error('Error deactivating property:', err);
       alert('Failed to deactivate property: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteTenant = async () => {
+    if (!property || !leaseId) return;
+    
+    setLoading(true);
+    try {
+      // Store timestamp in local timezone format to match existing data
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
+      
+      const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+      const currentDate = `${year}-${month}-${day}`;
+      
+      // Deactivate the lease
+      const { error: leaseError } = await supabase
+        .from('leases')
+        .update({ 
+          is_active: false, 
+          end_date: currentDate,
+          updated_at: currentTime
+        })
+        .eq('id', leaseId)
+        .eq('is_active', true);
+
+      if (leaseError) {
+        throw leaseError;
+      }
+
+      // Update property status to vacant
+      const { error: propError } = await supabase
+        .from('properties')
+        .update({ 
+          status: 'vacant',
+          updated_at: currentTime
+        })
+        .eq('id', property.id);
+
+      if (propError) {
+        console.warn('Error updating property status:', propError);
+      }
+
+      // Update the property state
+      setProperty(prev => prev ? {
+        ...prev,
+        tenant: 'Vacant',
+        tenantPhone: '',
+        tenantEmail: '',
+        leaseStart: '',
+        leaseEnd: '',
+        status: 'vacant'
+      } : null);
+
+      // Reset leaseId since the lease is now inactive
+      setLeaseId('');
+
+      setShowDeleteTenantConfirm(false);
+      alert('Tenant removed successfully! Property is now vacant.');
+    } catch (err: any) {
+      console.error('Error removing tenant:', err);
+      alert('Failed to remove tenant: ' + err.message);
     } finally {
       setLoading(false);
     }
@@ -638,6 +1105,7 @@ export const PropertyDetails: React.FC = () => {
 
   const tabs = [
     { id: 'overview', label: 'Overview' },
+    { id: 'gallery', label: 'Gallery' },
     { id: 'payments', label: 'Payment History' },
     { id: 'documents', label: 'Documents' },
     { id: 'maintenance', label: 'Maintenance' },
@@ -685,6 +1153,7 @@ export const PropertyDetails: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -703,17 +1172,6 @@ export const PropertyDetails: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
@@ -750,39 +1208,129 @@ export const PropertyDetails: React.FC = () => {
           <span className="text-glass">{currentProperty.name}</span>
         </div>
 
+        {/* Edit Mode Controls */}
+        {isEditMode && (
+          <div className="glass-card rounded-xl p-4 mb-6 border-2 border-green-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 glass rounded-lg flex items-center justify-center">
+                  <Edit className="w-5 h-5 text-green-800" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-glass">Edit Mode</h2>
+                  <p className="text-sm text-glass-muted">Make changes to the property details below</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <Button
+                  onClick={handleCancelEdit}
+                  variant="outline"
+                  className="flex items-center gap-2"
+                >
+                  <X size={16} />
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSaveChanges}
+                  loading={loading}
+                  className="flex items-center gap-2"
+                >
+                  <Save size={16} />
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Property Header */}
         <div className="glass-card rounded-xl p-6 mb-8">
           <div className="flex flex-col lg:flex-row gap-6">
-            <ImageWithFallback
-              src={currentProperty.image}
-              alt={currentProperty.name}
-              className="w-full lg:w-80 h-60 rounded-lg"
-              fallbackText="No Image"
-            />
+            <div className="w-full lg:w-80 h-60 relative">
+              <ImageWithFallback
+                src={currentProperty.image}
+                alt={currentProperty.name}
+                className="w-full h-full rounded-lg object-cover"
+                fallbackText="No Image"
+              />
+              
+              {/* Gallery management hint in edit mode */}
+              {isEditMode && (
+                <div className="absolute bottom-2 right-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setActiveTab('gallery')}
+                    className="bg-white bg-opacity-20 border-white text-white hover:bg-opacity-30"
+                  >
+                    <Eye size={14} className="mr-1" />
+                    Manage Images
+                  </Button>
+                </div>
+              )}
+            </div>
             
             <div className="flex-1">
               <div className="flex items-start justify-between mb-4">
-                <div>
-                  <h1 className="text-3xl font-bold text-glass mb-2">{currentProperty.name}</h1>
-                  <p className="text-glass-muted flex items-center gap-1 mb-2">
-                    <MapPin size={16} />
-                    {currentProperty.address}
-                  </p>
-                  <div className="flex gap-2 mb-4">
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(currentProperty.status)}`}>
-                      {currentProperty.status}
-                    </span>
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusColor(currentProperty.paymentStatus)}`}>
-                      {currentProperty.paymentStatus}
-                    </span>
+                <div className="flex-1">
+                  {isEditMode ? (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-glass mb-2">Property Name</label>
+                        <Input
+                          label=""
+                          type="text"
+                          value={editForm.name}
+                          onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
+                          icon={<Building2 size={18} />}
+                          placeholder="Enter property name"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-glass mb-2">Address</label>
+                        <Input
+                          label=""
+                          type="text"
+                          value={editForm.address}
+                          onChange={(e) => setEditForm(prev => ({ ...prev, address: e.target.value }))}
+                          icon={<MapPin size={18} />}
+                          placeholder="Enter property address"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <h1 className="text-3xl font-bold text-glass mb-2">{currentProperty.name}</h1>
+                      <p className="text-glass-muted flex items-center gap-1 mb-2">
+                        <MapPin size={16} />
+                        {currentProperty.address}
+                      </p>
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-2 mb-4">
+                    <div className="flex gap-2">
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(currentProperty.status)}`}>
+                        {currentProperty.status}
+                      </span>
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusColor(currentProperty.paymentStatus)}`}>
+                        {currentProperty.paymentStatus}
+                      </span>
+                    </div>
+                    {currentProperty.leaseStatus && currentProperty.leaseStatus.status !== 'active' && (
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getLeaseStatusColor(currentProperty.leaseStatus.status)}`}>
+                        {getLeaseStatusIcon(currentProperty.leaseStatus.status)} {currentProperty.leaseStatus.message}
+                      </span>
+                    )}
                   </div>
                 </div>
                 
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setShowEditProperty(true)}>
-                    <Edit size={16} className="mr-1" />
-                    Edit
-                  </Button>
+                  {!isEditMode && (
+                    <Button variant="outline" size="sm" onClick={handleEnterEditMode}>
+                      <Edit size={16} className="mr-1" />
+                      Edit
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700" onClick={() => setShowDeleteConfirm(true)}>
                     <Trash2 size={16} className="mr-1" />
                     Delete
@@ -790,26 +1338,46 @@ export const PropertyDetails: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">₹{(currentProperty.rent || 0).toLocaleString()}</p>
-                  <p className="text-sm text-glass-muted">Monthly Rent</p>
-                </div>
-                <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">{currentProperty.area || 0}</p>
-                  <p className="text-sm text-glass-muted">Sq Ft</p>
-                </div>
-                {currentProperty.bedrooms && (
+              {isEditMode ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                   <div className="glass rounded-lg p-3">
-                    <p className="text-2xl font-bold text-glass">{currentProperty.bedrooms}</p>
-                    <p className="text-sm text-glass-muted">Bedrooms</p>
+                    <p className="text-2xl font-bold text-glass">{currentProperty.area || 0}</p>
+                    <p className="text-sm text-glass-muted">Sq Ft</p>
                   </div>
-                )}
-                <div className="glass rounded-lg p-3">
-                  <p className="text-2xl font-bold text-glass">₹{(currentProperty.securityDeposit || 0).toLocaleString()}</p>
-                  <p className="text-sm text-glass-muted">Security Deposit</p>
+                  {currentProperty.bedrooms && (
+                    <div className="glass rounded-lg p-3">
+                      <p className="text-2xl font-bold text-glass">{currentProperty.bedrooms}</p>
+                      <p className="text-sm text-glass-muted">Bedrooms</p>
+                    </div>
+                  )}
                 </div>
-              </div>
+              ) : (
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+                  <div className="glass rounded-lg p-3">
+                    <p className="text-2xl font-bold text-glass">₹{(currentProperty.rent || 0).toLocaleString()}</p>
+                    <p className="text-sm text-glass-muted">Monthly Rent</p>
+                  </div>
+                  <div className="glass rounded-lg p-3">
+                    <p className="text-2xl font-bold text-glass">{currentProperty.area || 0}</p>
+                    <p className="text-sm text-glass-muted">Sq Ft</p>
+                  </div>
+                  {currentProperty.bedrooms && (
+                    <div className="glass rounded-lg p-3">
+                      <p className="text-2xl font-bold text-glass">{currentProperty.bedrooms}</p>
+                      <p className="text-sm text-glass-muted">Bedrooms</p>
+                    </div>
+                  )}
+                  <div className="glass rounded-lg p-3">
+                    <p className="text-2xl font-bold text-glass">₹{(currentProperty.securityDeposit || 0).toLocaleString()}</p>
+                    <p className="text-sm text-glass-muted">Security Deposit</p>
+                  </div>
+                  <div className="glass rounded-lg p-3">
+                    <p className="text-2xl font-bold text-glass">₹{(currentProperty.maintenanceCharges || 0).toLocaleString()}</p>
+                    <p className="text-sm text-glass-muted">Maintenance</p>
+                  </div>
+                </div>
+              )}
+
 
               <div className="flex gap-3">
                 <Button className="flex items-center gap-2" onClick={() => setShowRecordPayment(true)}>
@@ -851,18 +1419,50 @@ export const PropertyDetails: React.FC = () => {
               <div className="space-y-6">
                 <div>
                   <h3 className="text-lg font-semibold text-glass mb-3">Description</h3>
-                  <p className="text-glass-muted">{currentProperty.description}</p>
+                  {isEditMode ? (
+                    <div>
+                      <label className="block text-sm font-medium text-glass mb-2">Property Description</label>
+                      <textarea
+                        value={editForm.description}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
+                        rows={4}
+                        className="w-full px-3 py-2 rounded-lg glass-input text-glass placeholder-glass-muted"
+                        placeholder="Enter property description..."
+                      />
+                    </div>
+                  ) : (
+                    <p className="text-glass-muted">{currentProperty.description}</p>
+                  )}
                 </div>
 
                 <div>
                   <h3 className="text-lg font-semibold text-glass mb-3">Amenities</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                    {currentProperty.amenities.map((amenity, index) => (
-                      <div key={index} className="glass rounded-lg p-2 text-center">
-                        <span className="text-sm text-glass">{amenity}</span>
+                  {isEditMode ? (
+                    <div className="space-y-3">
+                      <label className="block text-sm font-medium text-glass">Select Amenities</label>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        {availableAmenities.map((amenity) => (
+                          <label key={amenity} className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={editForm.amenities.includes(amenity)}
+                              onChange={() => handleAmenityToggle(amenity)}
+                              className="rounded border-white border-opacity-30 bg-white bg-opacity-10 text-green-800 focus:ring-green-800"
+                            />
+                            <span className="text-sm text-glass">{amenity}</span>
+                          </label>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      {currentProperty.amenities.map((amenity, index) => (
+                        <div key={index} className="glass rounded-lg p-2 text-center">
+                          <span className="text-sm text-glass">{amenity}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -892,33 +1492,48 @@ export const PropertyDetails: React.FC = () => {
                     </div>
                   </div>
 
-                  <div>
-                    <h3 className="text-lg font-semibold text-glass mb-3">Lease Information</h3>
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span className="text-glass-muted">Start Date:</span>
-                        <span className="text-glass">{currentProperty.leaseStart ? new Date(currentProperty.leaseStart).toLocaleDateString() : 'Not set'}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-glass-muted">End Date:</span>
-                        <span className="text-glass">{currentProperty.leaseEnd ? new Date(currentProperty.leaseEnd).toLocaleDateString() : 'Not set'}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-glass-muted">Monthly Rent:</span>
-                        <span className="text-glass">₹{(currentProperty.rent || 0).toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-glass-muted">Security Deposit:</span>
-                        <span className="text-glass">₹{(currentProperty.securityDeposit || 0).toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-glass-muted">Maintenance Charges:</span>
-                        <span className="text-glass">₹{(currentProperty.maintenanceCharges || 0).toLocaleString()}</span>
+                  {currentProperty.tenant && currentProperty.tenant !== 'Vacant' && (
+                    <div>
+                      <h3 className="text-lg font-semibold text-glass mb-3">Lease Information</h3>
+                      <div className="space-y-2">
+                        <div className="flex justify-between">
+                          <span className="text-glass-muted">Start Date:</span>
+                          <span className="text-glass">{currentProperty.leaseStart ? formatDateDDMMYYYY(currentProperty.leaseStart) : 'Not set'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-glass-muted">End Date:</span>
+                          <span className="text-glass">{currentProperty.leaseEnd ? formatDateDDMMYYYY(currentProperty.leaseEnd) : 'Not set'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-glass-muted">Monthly Rent:</span>
+                          <span className="text-glass">₹{(currentProperty.rent || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-glass-muted">Security Deposit:</span>
+                          <span className="text-glass">₹{(currentProperty.securityDeposit || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-glass-muted">Maintenance Charges:</span>
+                          <span className="text-glass">₹{(currentProperty.maintenanceCharges || 0).toLocaleString()}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               </div>
+            )}
+
+            {/* Gallery Tab */}
+            {activeTab === 'gallery' && (
+              <PropertyGallery 
+                propertyId={currentProperty.id} 
+                onPrimaryImageChange={(imageUrl: string) => {
+                  setProperty(prev => prev ? {
+                    ...prev,
+                    image: imageUrl
+                  } : null);
+                }}
+              />
             )}
 
             {/* Payment History Tab */}
@@ -950,7 +1565,7 @@ export const PropertyDetails: React.FC = () => {
                           </div>
                           <div>
                             <p className="font-medium text-glass">₹{payment.amount.toLocaleString()}</p>
-                            <p className="text-sm text-glass-muted">{new Date(payment.date).toLocaleDateString()}</p>
+                            <p className="text-sm text-glass-muted">{formatDateDDMMYYYY(payment.date)}</p>
                           </div>
                         </div>
                         
@@ -1074,7 +1689,7 @@ export const PropertyDetails: React.FC = () => {
                             </div>
                             <div>
                               <p className="font-medium text-glass">{request.title || 'Maintenance Request'}</p>
-                              <p className="text-sm text-glass-muted">{new Date(request.created_at).toLocaleDateString()}</p>
+                              <p className="text-sm text-glass-muted">{formatDateDDMMYYYY(request.created_at)}</p>
                             </div>
                           </div>
                           
@@ -1096,7 +1711,100 @@ export const PropertyDetails: React.FC = () => {
             {/* Tenant Details Tab */}
             {activeTab === 'tenant' && (
               <div className="space-y-6">
-                {currentProperty.tenant ? (
+                {isEditMode ? (
+                  <div className="space-y-6">
+                    <h3 className="text-lg font-semibold text-glass">Edit Tenant Information</h3>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <Input
+                        label="Tenant Name"
+                        type="text"
+                        value={editForm.tenantName}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, tenantName: e.target.value }))}
+                        icon={<User size={18} />}
+                        placeholder="Enter tenant name"
+                      />
+
+                      <Input
+                        label="Tenant Phone"
+                        type="tel"
+                        value={editForm.tenantPhone}
+                        onChange={(e) => setEditForm(prev => ({ ...prev, tenantPhone: e.target.value }))}
+                        icon={<Phone size={18} />}
+                        placeholder="Enter phone number"
+                      />
+                    </div>
+
+                    <Input
+                      label="Tenant Email"
+                      type="email"
+                      value={editForm.tenantEmail}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, tenantEmail: e.target.value }))}
+                      icon={<Mail size={18} />}
+                      placeholder="Enter email address"
+                    />
+
+                    {editForm.tenantName.trim() && (
+                      <div className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                          <Input
+                            label="Monthly Rent (₹)"
+                            type="number"
+                            value={editForm.rent || ''}
+                            onChange={(e) => setEditForm(prev => ({ ...prev, rent: parseFloat(e.target.value) || 0 }))}
+                            icon={<IndianRupee size={18} />}
+                            placeholder="Enter monthly rent"
+                          />
+
+                          <Input
+                            label="Security Deposit (₹)"
+                            type="number"
+                            value={editForm.securityDeposit || ''}
+                            onChange={(e) => setEditForm(prev => ({ ...prev, securityDeposit: parseFloat(e.target.value) || 0 }))}
+                            icon={<IndianRupee size={18} />}
+                            placeholder="Enter security deposit"
+                          />
+
+                          <Input
+                            label="Maintenance Charges (₹)"
+                            type="number"
+                            value={editForm.maintenanceCharges || ''}
+                            onChange={(e) => setEditForm(prev => ({ ...prev, maintenanceCharges: parseFloat(e.target.value) || 0 }))}
+                            icon={<IndianRupee size={18} />}
+                            placeholder="Enter maintenance charges"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <Input
+                            label="Lease Start Date"
+                            type="date"
+                            value={editForm.leaseStart}
+                            onChange={(e) => setEditForm(prev => ({ ...prev, leaseStart: e.target.value }))}
+                            icon={<Calendar size={18} />}
+                          />
+
+                          <Input
+                            label="Lease End Date"
+                            type="date"
+                            value={editForm.leaseEnd}
+                            onChange={(e) => setEditForm(prev => ({ ...prev, leaseEnd: e.target.value }))}
+                            icon={<Calendar size={18} />}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="glass rounded-lg p-4">
+                      <h4 className="font-medium text-glass mb-2">Instructions</h4>
+                      <div className="text-sm text-glass-muted space-y-2">
+                        <p><strong>To add a new tenant:</strong> Fill in all tenant details and lease dates, then save.</p>
+                        <p><strong>To update existing tenant:</strong> Modify the tenant information and save.</p>
+                        <p><strong>To deactivate tenant:</strong> Clear the tenant name field and save to mark property as vacant.</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : currentProperty.tenant && currentProperty.tenant !== 'Vacant' ? (
                   <>
                     <div className="flex items-center justify-between">
                       <h3 className="text-lg font-semibold text-glass">Tenant Information</h3>
@@ -1108,6 +1816,14 @@ export const PropertyDetails: React.FC = () => {
                         <Button variant="outline" className="flex items-center gap-2" onClick={handleEmail}>
                           <Mail size={16} />
                           Email
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          className="flex items-center gap-2 text-red-600 hover:text-red-700 hover:bg-red-100" 
+                          onClick={() => setShowDeleteTenantConfirm(true)}
+                        >
+                          <Trash2 size={16} />
+                          Remove Tenant
                         </Button>
                       </div>
                     </div>
@@ -1144,7 +1860,7 @@ export const PropertyDetails: React.FC = () => {
                             <div className="flex items-center gap-2">
                               <Calendar size={16} className="text-glass-muted" />
                               <span className="text-glass">
-                                {currentProperty.leaseStart ? new Date(currentProperty.leaseStart).toLocaleDateString() : 'Not set'} - {currentProperty.leaseEnd ? new Date(currentProperty.leaseEnd).toLocaleDateString() : 'Not set'}
+                                {currentProperty.leaseStart ? formatDateDDMMYYYY(currentProperty.leaseStart) : 'Not set'} - {currentProperty.leaseEnd ? formatDateDDMMYYYY(currentProperty.leaseEnd) : 'Not set'}
                               </span>
                             </div>
                             <div className="flex items-center gap-2">
@@ -1214,7 +1930,7 @@ export const PropertyDetails: React.FC = () => {
                     value={paymentForm.amount || ''}
                     onChange={(e) => setPaymentForm(prev => ({ ...prev, amount: parseFloat(e.target.value) || 0 }))}
                     icon={<IndianRupee size={18} />}
-                    placeholder="15000"
+                    placeholder="Enter amount"
                   />
 
                   <Input
@@ -1243,6 +1959,36 @@ export const PropertyDetails: React.FC = () => {
                     </select>
                   </div>
 
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-glass">Payment Type</label>
+                    <select
+                      value={paymentForm.paymentType}
+                      onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentType: e.target.value as any }))}
+                      className="w-full h-11 px-3 rounded-lg glass-input text-glass"
+                    >
+                      <option value="Rent">Rent</option>
+                      <option value="Maintenance">Maintenance</option>
+                      <option value="Security Deposit">Security Deposit</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Payment Type Details - Only show when "Other" is selected */}
+                {paymentForm.paymentType === 'Other' && (
+                  <div className="space-y-2">
+                    <label className="block text-sm font-medium text-glass">Payment Details</label>
+                    <textarea
+                      value={paymentForm.paymentTypeDetails}
+                      onChange={(e) => setPaymentForm(prev => ({ ...prev, paymentTypeDetails: e.target.value }))}
+                      placeholder="Please specify the payment type details..."
+                      className="w-full px-3 py-2 rounded-lg glass-input text-glass placeholder-glass-muted resize-none"
+                      rows={3}
+                    />
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <Input
                     label="Reference Number"
                     type="text"
@@ -1466,7 +2212,7 @@ export const PropertyDetails: React.FC = () => {
                     multiple
                     accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xlsx,.xls"
                     onChange={handleFileUpload}
-                    className="hidden"
+                    style={{ display: 'none' }}
                     id="document-upload"
                     ref={fileInputRef}
                   />
@@ -1555,94 +2301,6 @@ export const PropertyDetails: React.FC = () => {
         </div>
       )}
 
-      {/* Edit Property Modal */}
-      {showEditProperty && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="glass-card rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 glass rounded-lg flex items-center justify-center">
-                    <Edit className="w-5 h-5 text-green-800" />
-                  </div>
-                  <h2 className="text-2xl font-bold text-glass">Edit Property</h2>
-                </div>
-                <button
-                  onClick={() => setShowEditProperty(false)}
-                  className="p-2 hover:bg-white hover:bg-opacity-20 rounded-lg transition-colors"
-                >
-                  <X size={20} className="text-glass-muted" />
-                </button>
-              </div>
-
-              <div className="space-y-6">
-                <Input
-                  label="Property Name"
-                  type="text"
-                  value={editForm.name}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
-                  icon={<Building2 size={18} />}
-                />
-
-                <Input
-                  label="Address"
-                  type="text"
-                  value={editForm.address}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, address: e.target.value }))}
-                  icon={<MapPin size={18} />}
-                />
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <Input
-                    label="Monthly Rent (₹)"
-                    type="number"
-                    value={editForm.rent || ''}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, rent: parseFloat(e.target.value) || 0 }))}
-                    icon={<IndianRupee size={18} />}
-                  />
-
-                  <Input
-                    label="Security Deposit (₹)"
-                    type="number"
-                    value={editForm.securityDeposit || ''}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, securityDeposit: parseFloat(e.target.value) || 0 }))}
-                    icon={<IndianRupee size={18} />}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-glass">Description</label>
-                  <textarea
-                    value={editForm.description}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
-                    rows={4}
-                    className="w-full px-3 py-2 rounded-lg glass-input text-glass placeholder-glass-muted"
-                    placeholder="Property description..."
-                  />
-                </div>
-
-                <div className="flex gap-4">
-                  <Button
-                    onClick={() => setShowEditProperty(false)}
-                    variant="outline"
-                    className="flex-1"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    onClick={handleEditProperty}
-                    loading={loading}
-                    className="flex-1 flex items-center gap-2"
-                  >
-                    <Save size={16} />
-                    Save Changes
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
@@ -1686,6 +2344,50 @@ export const PropertyDetails: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Delete Tenant Confirmation Modal */}
+      {showDeleteTenantConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="glass-card rounded-xl max-w-md w-full">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
+                  <AlertCircle className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-glass">Remove Tenant</h3>
+                  <p className="text-glass-muted">This will end the lease agreement</p>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <p className="text-glass-muted">
+                  Are you sure you want to remove "{currentProperty.tenant}" from this property? 
+                  This will end the lease agreement and mark the property as vacant.
+                </p>
+                
+                <div className="flex gap-3">
+                  <Button
+                    onClick={() => setShowDeleteTenantConfirm(false)}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleDeleteTenant}
+                    loading={loading}
+                    className="flex-1 bg-red-600 hover:bg-red-700"
+                  >
+                    Remove Tenant
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

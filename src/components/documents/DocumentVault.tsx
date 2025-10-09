@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   Building2, 
@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
 import { fetchUserDocuments, uploadDocument, softDeleteDocument } from '../../utils/documentUpload';
 import { supabase } from '../../lib/supabase';
@@ -75,7 +76,6 @@ export const DocumentVault: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [sortBy, setSortBy] = useState<string>('date');
   const [showFilters, setShowFilters] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -83,12 +83,13 @@ export const DocumentVault: React.FC = () => {
   const [properties, setProperties] = useState<{id: string, name: string}[]>([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState<string>('');
   const [selectedDocType, setSelectedDocType] = useState<string>('other');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
@@ -161,6 +162,24 @@ export const DocumentVault: React.FC = () => {
     console.log('File upload triggered:', e.target.files);
     const files = Array.from(e.target.files || []);
     console.log('Files selected:', files);
+    setUploadFiles(prev => [...prev, ...files]);
+  };
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      // Add visual feedback for drag over
+    } else if (e.type === 'dragleave') {
+      // Remove visual feedback
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const files = Array.from(e.dataTransfer.files);
+    console.log('Files dropped:', files);
     setUploadFiles(prev => [...prev, ...files]);
   };
 
@@ -513,6 +532,7 @@ export const DocumentVault: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -531,17 +551,8 @@ export const DocumentVault: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
@@ -890,6 +901,20 @@ export const DocumentVault: React.FC = () => {
 
                 <div 
                   className="border-2 border-dashed border-white border-opacity-30 rounded-lg p-6 text-center hover:border-green-800 transition-colors cursor-pointer"
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={handleDrop}
+                  onClick={(e) => {
+                    // Only trigger if the click is directly on the drag area, not on the button
+                    if (e.target === e.currentTarget) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (fileInputRef.current) {
+                        fileInputRef.current.click();
+                      }
+                    }
+                  }}
                 >
                   <Upload size={32} className="mx-auto text-glass-muted mb-4" />
                   <p className="text-glass-muted mb-4">
@@ -903,29 +928,28 @@ export const DocumentVault: React.FC = () => {
                       console.log('File input onChange triggered:', e.target.files);
                       handleFileUpload(e);
                     }}
-                    className="hidden"
-                    id="document-upload"
+                    style={{ display: 'none' }}
+                    ref={fileInputRef}
                   />
-                  <label htmlFor="document-upload">
-                    <Button 
-                      variant="outline" 
-                      className="cursor-pointer" 
-                      type="button"
-                      onClick={() => {
-                        console.log('Choose Files button clicked');
-                        // Trigger the file input
-                        const fileInput = document.getElementById('document-upload') as HTMLInputElement;
-                        if (fileInput) {
-                          console.log('Triggering file input click');
-                          fileInput.click();
-                        } else {
-                          console.error('File input not found');
-                        }
-                      }}
-                    >
-                      Choose Files
-                    </Button>
-                  </label>
+                  <Button 
+                    variant="outline" 
+                    className="cursor-pointer" 
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      console.log('Choose Files button clicked');
+                      if (fileInputRef.current) {
+                        console.log('Triggering file input click');
+                        fileInputRef.current.click();
+                      } else {
+                        console.error('File input ref not found');
+                      }
+                    }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
+                    Choose Files
+                  </Button>
                 </div>
 
                 {uploadFiles.length > 0 && (

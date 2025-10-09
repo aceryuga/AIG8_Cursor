@@ -20,8 +20,14 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
+import { getCurrentUTC } from '../../utils/timezoneUtils';
+import { sanitizeText, validateFileType, validateFileSize, SECURITY_CONSTANTS } from '../../utils/security';
+import { updatePropertyCountInSettings } from '../../utils/settingsUtils';
+import { checkPropertyLimit } from '../../utils/usageLimits';
+import { UpgradePrompt } from '../ui/UpgradePrompt';
 
 interface PropertyForm {
   // Basic Details
@@ -92,13 +98,18 @@ export const AddProperty: React.FC = () => {
   const [form, setForm] = useState<PropertyForm>(initialForm);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
+  const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
+  const [upgradePromptData, setUpgradePromptData] = useState<{
+    currentPlan: string;
+    suggestedPlan?: string;
+    reason: string;
+  } | null>(null);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
@@ -147,23 +158,50 @@ export const AddProperty: React.FC = () => {
   };
 
   const handleSubmit = async () => {
+    // Check property limits before proceeding
+    if (user?.id) {
+      const limitCheck = await checkPropertyLimit(user.id);
+      if (!limitCheck.allowed) {
+        setUpgradePromptData({
+          currentPlan: limitCheck.currentPlan || 'Unknown',
+          suggestedPlan: limitCheck.suggestedPlan,
+          reason: limitCheck.reason || 'Property limit reached'
+        });
+        setShowUpgradePrompt(true);
+        return;
+      }
+    }
+
+    // Sanitize form data before validation and submission
+    const sanitizedForm = {
+      ...form,
+      name: sanitizeText(form.name),
+      address: sanitizeText(form.address),
+      description: sanitizeText(form.description),
+      tenantName: sanitizeText(form.tenantName),
+      tenantPhone: sanitizeText(form.tenantPhone),
+      tenantEmail: sanitizeText(form.tenantEmail),
+      // Numbers and select fields don't need sanitization
+      area: form.area,
+      bedrooms: form.bedrooms,
+      bathrooms: form.bathrooms,
+      rent: form.rent,
+      securityDeposit: form.securityDeposit,
+      maintenanceCharges: form.maintenanceCharges,
+      propertyType: form.propertyType
+    };
+    
+    // Update form with sanitized data
+    setForm(sanitizedForm);
+    
     if (!validateStep(3)) return;
 
     setLoading(true);
     setErrors({});
 
     try {
-      // Create timestamp in local timezone format to match existing data
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const seconds = String(now.getSeconds()).padStart(2, '0');
-      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
-      
-      const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
+      // Create timestamp in UTC format for consistent storage
+      const currentTime = getCurrentUTC();
 
       // 1. Generate a UUID for the property (client-side, to use for image path)
       const propertyId = crypto.randomUUID();
@@ -212,6 +250,11 @@ export const AddProperty: React.FC = () => {
       }
       console.log('Property insert success:', property);
       console.log('Property creation debug - stored timestamp:', currentTime);
+
+      // Update property count in user settings
+      if (user?.id) {
+        await updatePropertyCountInSettings(user.id);
+      }
 
       // 3. Optionally insert tenant and lease
       if (form.tenantName.trim()) {
@@ -277,8 +320,13 @@ export const AddProperty: React.FC = () => {
   };
 
   const handleChange = (field: keyof PropertyForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const value = e.target.type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value;
-    setForm(prev => ({ ...prev, [field]: value }));
+    let value = e.target.value;
+    
+    // Don't sanitize during typing - only sanitize on form submission
+    // This allows users to type freely without interruption
+    
+    const finalValue = e.target.type === 'number' ? parseFloat(value) || 0 : value;
+    setForm(prev => ({ ...prev, [field]: finalValue }));
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
     }
@@ -301,7 +349,35 @@ export const AddProperty: React.FC = () => {
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    setForm(prev => ({ ...prev, images: [...prev.images, ...files] }));
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+    
+    files.forEach(file => {
+      // Validate file type
+      if (!validateFileType(file.name, [...SECURITY_CONSTANTS.ALLOWED_IMAGE_TYPES])) {
+        errors.push(`File "${file.name}" is not a supported image type.`);
+        return;
+      }
+      
+      // Validate file size
+      if (!validateFileSize(file.size, SECURITY_CONSTANTS.MAX_FILE_SIZE)) {
+        errors.push(`File "${file.name}" is too large. Maximum size is 10MB.`);
+        return;
+      }
+      
+      validFiles.push(file);
+    });
+    
+    if (errors.length > 0) {
+      alert(errors.join('\n'));
+    }
+    
+    if (validFiles.length > 0) {
+      setForm(prev => ({ ...prev, images: [...prev.images, ...validFiles] }));
+    }
+    
+    // Clear the input
+    e.target.value = '';
   };
 
   const removeImage = (index: number) => {
@@ -331,6 +407,7 @@ export const AddProperty: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -349,17 +426,8 @@ export const AddProperty: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
@@ -755,6 +823,25 @@ export const AddProperty: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Upgrade Prompt */}
+      {upgradePromptData && (
+        <UpgradePrompt
+          isOpen={showUpgradePrompt}
+          onClose={() => {
+            setShowUpgradePrompt(false);
+            setUpgradePromptData(null);
+          }}
+          currentPlan={upgradePromptData.currentPlan}
+          suggestedPlan={upgradePromptData.suggestedPlan}
+          reason={upgradePromptData.reason}
+          userId={user?.id || ''}
+          onUpgradeSuccess={() => {
+            // After successful upgrade, retry property creation
+            handleSubmit();
+          }}
+        />
+      )}
     </div>
   );
 };

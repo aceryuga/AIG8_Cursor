@@ -1,6 +1,11 @@
 /**
  * Timezone utility functions for consistent date/time handling
+ * Optimized for India Standard Time (IST) - UTC+5:30
  */
+
+// IST timezone constant
+export const IST_TIMEZONE = 'Asia/Kolkata';
+export const IST_OFFSET_MINUTES = 330; // +5:30 hours in minutes
 
 /**
  * Get user's timezone offset in minutes
@@ -76,8 +81,19 @@ export const formatLocalTime = (
  * @returns Relative time string
  */
 export const getRelativeTime = (dateString: string): string => {
-  // Parse the date string - handle both UTC and local timezone formats
-  const date = new Date(dateString);
+  // Parse the date string - handle both UTC and local timestamps
+  let date: Date;
+  
+  if (dateString.endsWith('Z') || dateString.includes('+') || dateString.includes('T')) {
+    // Already has timezone info, parse as-is
+    date = new Date(dateString);
+  } else {
+    // No timezone info - this is a timestamp without timezone from Supabase
+    // These are stored in local time (IST) but without timezone info
+    // Parse as local time
+    date = new Date(dateString);
+  }
+  
   const now = new Date();
   
   // Check if date is valid
@@ -86,6 +102,7 @@ export const getRelativeTime = (dateString: string): string => {
     return 'Invalid date';
   }
   
+  // Both dates are now in UTC milliseconds since epoch
   const diffInMs = now.getTime() - date.getTime();
   
   // Debug logging (can be removed in production)
@@ -93,7 +110,13 @@ export const getRelativeTime = (dateString: string): string => {
   //   dateString,
   //   parsedDate: date,
   //   diffInMs,
-  //   diffInHours: Math.floor(diffInMs / (1000 * 60 * 60))
+  //   diffInHours: Math.floor(diffInMs / (1000 * 60 * 60)),
+  //   diffInMinutes: Math.floor(diffInMs / (1000 * 60)),
+  //   now: now.toISOString(),
+  //   dateISO: date.toISOString(),
+  //   nowIST: new Date(now.toLocaleString('en-US', { timeZone: IST_TIMEZONE })).toISOString(),
+  //   dateIST: new Date(date.toLocaleString('en-US', { timeZone: IST_TIMEZONE })).toISOString(),
+  //   isFuture: diffInMs < 0
   // });
   
   // Handle future dates
@@ -120,6 +143,83 @@ export const getRelativeTime = (dateString: string): string => {
   } else {
     return date.toLocaleDateString();
   }
+};
+
+/**
+ * Get relative time for Recent Activity (handles UTC timestamps correctly)
+ * @param dateString - Date string from Supabase (stored in UTC)
+ * @returns Relative time string
+ */
+export const getRecentActivityTime = (dateString: string): string => {
+  // For Recent Activity, treat all timestamps as UTC since Supabase stores them in UTC
+  // even when they don't have timezone info
+  let date: Date;
+  
+  if (dateString.endsWith('Z') || dateString.includes('+') || dateString.includes('T')) {
+    // Already has timezone info, parse as-is
+    date = new Date(dateString);
+  } else {
+    // No timezone info - treat as UTC (Supabase stores timestamps in UTC)
+    date = new Date(dateString + 'Z');
+  }
+  
+  const now = new Date();
+  
+  // Check if date is valid
+  if (isNaN(date.getTime())) {
+    console.error('Invalid date in getRecentActivityTime:', dateString);
+    return 'Invalid date';
+  }
+  
+  // Calculate difference in milliseconds
+  const diffInMs = now.getTime() - date.getTime();
+  
+  // Handle future dates
+  if (diffInMs < 0) {
+    const futureDays = Math.ceil(Math.abs(diffInMs) / (1000 * 60 * 60 * 24));
+    return `In ${futureDays} day${futureDays > 1 ? 's' : ''}`;
+  }
+  
+  const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+  const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+  const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+
+  if (diffInMinutes < 1) {
+    return 'Just now';
+  } else if (diffInMinutes < 60) {
+    return `${diffInMinutes} minute${diffInMinutes > 1 ? 's' : ''} ago`;
+  } else if (diffInHours < 24) {
+    return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
+  } else if (diffInDays < 7) {
+    return `${diffInDays} day${diffInDays > 1 ? 's' : ''} ago`;
+  } else if (diffInDays < 30) {
+    const weeks = Math.floor(diffInDays / 7);
+    return `${weeks} week${weeks > 1 ? 's' : ''} ago`;
+  } else {
+    return date.toLocaleDateString();
+  }
+};
+
+/**
+ * Format date in DD/MM/YYYY format for display (IST)
+ * @param dateString - Date string (ISO or any valid date format)
+ * @returns Formatted date string in DD/MM/YYYY format
+ */
+export const formatDateDDMMYYYY = (dateString: string | Date): string => {
+  const date = typeof dateString === 'string' ? new Date(dateString) : dateString;
+  
+  if (isNaN(date.getTime())) {
+    console.error('Invalid date in formatDateDDMMYYYY:', dateString);
+    return 'Invalid date';
+  }
+  
+  // Convert to IST for consistent display
+  const istDate = new Date(date.toLocaleString('en-US', { timeZone: IST_TIMEZONE }));
+  const day = String(istDate.getDate()).padStart(2, '0');
+  const month = String(istDate.getMonth() + 1).padStart(2, '0');
+  const year = istDate.getFullYear();
+  
+  return `${day}/${month}/${year}`;
 };
 
 /**
@@ -166,4 +266,39 @@ export const fromDateInput = (dateInputValue: string): string => {
 export const fromDateTimeInput = (datetimeInputValue: string): string => {
   const localDate = new Date(datetimeInputValue);
   return toUTC(localDate);
+};
+
+/**
+ * Get current date/time in IST for display
+ * @returns Date object in IST
+ */
+export const getCurrentIST = (): Date => {
+  const now = new Date();
+  return new Date(now.toLocaleString('en-US', { timeZone: IST_TIMEZONE }));
+};
+
+/**
+ * Format date/time for display in IST
+ * @param utcDateString - ISO string from Supabase (UTC)
+ * @param options - Intl.DateTimeFormatOptions
+ * @returns Formatted date/time string in IST
+ */
+export const formatISTDateTime = (
+  utcDateString: string, 
+  options: Intl.DateTimeFormatOptions = {}
+): string => {
+  const date = fromUTC(utcDateString);
+  return date.toLocaleString('en-IN', { 
+    timeZone: IST_TIMEZONE,
+    ...options 
+  });
+};
+
+/**
+ * Get current date in YYYY-MM-DD format for HTML date inputs (IST)
+ * @returns Date string in YYYY-MM-DD format
+ */
+export const getCurrentISTDateInput = (): string => {
+  const istDate = getCurrentIST();
+  return istDate.toISOString().split('T')[0];
 };
