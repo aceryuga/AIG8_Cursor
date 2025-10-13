@@ -237,9 +237,13 @@ export const useAuth = () => {
   const logout = async () => {
     setLoading(true);
     try {
-      // Only call supabase.auth.signOut() - let the onAuthStateChange listener handle the state update
-      await supabase.auth.signOut();
-      // Remove manual setUser(null) to avoid conflicts with onAuthStateChange
+      // Sign out with 'local' scope to clear only local session
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) {
+        console.error('Supabase signOut error:', error);
+      }
+      // Explicitly clear user state immediately after signout
+      setUser(null);
     } catch (err) {
       console.error('Logout error:', err);
       // If signOut fails, manually clear the user state as fallback
