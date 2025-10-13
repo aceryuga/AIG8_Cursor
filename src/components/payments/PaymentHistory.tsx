@@ -171,7 +171,8 @@ export const PaymentHistory: React.FC = () => {
           lease_id: payment.lease_id,
           payment_date: payment.payment_date,
           payment_amount: payment.payment_amount,
-          status: payment.status as 'completed' | 'pending' | 'failed'
+          status: payment.status as 'completed' | 'pending' | 'failed',
+          payment_type: payment.payment_type
         }));
 
         // Calculate overdue and pending amounts using same logic as Dashboard

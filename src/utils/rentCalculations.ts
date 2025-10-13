@@ -21,6 +21,7 @@ export interface Payment {
   payment_date: string;
   payment_amount: number;
   status: 'completed' | 'pending' | 'failed';
+  payment_type?: string;
 }
 
 /**
@@ -52,30 +53,19 @@ export const calculateRentStatus = (
   const dueDate = new Date(currentYear, currentMonth, 1); // 1st of current month
   const overdueDate = new Date(currentYear, currentMonth, 6); // 6th of current month
   
-  // Check if property has received payment for previous month
-  // Since we collect rent in arrears, we look for payments made in the current month for the previous month's rent
-  const hasPaymentForPreviousMonth = payments.some(payment => {
-    const paymentDate = new Date(payment.payment_date);
-    const isCorrectMonth = paymentDate.getMonth() === currentMonth && 
-                          paymentDate.getFullYear() === currentYear;
-    const isCorrectLease = payment.lease_id === property.lease_id;
-    const isCompleted = payment.status === 'completed';
-    
-    
-    return isCorrectMonth && isCorrectLease && isCompleted;
-  });
-  
-  // If payment received, status is paid
-  if (hasPaymentForPreviousMonth) {
-    return {
-      status: 'paid',
-      amount: 0,
-      daysOccupied: 0,
-      effectiveStartDate: firstDayOfPreviousMonth,
-      dueDate,
-      overdueDate
-    };
-  }
+  // Calculate total payments received for this lease in current month
+  // Exclude security deposits as they don't reduce rent overdue amount
+  const totalPaymentsReceived = payments
+    .filter(payment => {
+      const paymentDate = new Date(payment.payment_date);
+      const isCorrectMonth = paymentDate.getMonth() === currentMonth && 
+                            paymentDate.getFullYear() === currentYear;
+      const isCorrectLease = payment.lease_id === property.lease_id;
+      const isCompleted = payment.status === 'completed';
+      const isNotSecurityDeposit = payment.payment_type !== 'Security Deposit';
+      return isCorrectMonth && isCorrectLease && isCompleted && isNotSecurityDeposit;
+    })
+    .reduce((sum, payment) => sum + payment.payment_amount, 0);
   
   // Calculate days occupied using the later of: first day of previous month OR lease start date
   const leaseStartDate = new Date(property.start_date);
@@ -101,6 +91,18 @@ export const calculateRentStatus = (
   const dailyRate = property.monthly_rent / daysInPreviousMonth;
   const proratedAmount = Math.round(dailyRate * daysOccupied);
   
+  // Check if full rent has been paid
+  if (totalPaymentsReceived >= proratedAmount) {
+    return {
+      status: 'paid',
+      amount: 0,
+      daysOccupied,
+      effectiveStartDate,
+      dueDate,
+      overdueDate
+    };
+  }
+  
   // Determine status based on current date
   let status: 'pending' | 'overdue';
   if (currentDay <= 5) {
@@ -109,10 +111,12 @@ export const calculateRentStatus = (
     status = 'overdue';
   }
   
+  // Calculate remaining amount after partial payments
+  const remainingAmount = Math.max(0, proratedAmount - totalPaymentsReceived);
   
   return {
     status,
-    amount: proratedAmount,
+    amount: remainingAmount,
     daysOccupied,
     effectiveStartDate,
     dueDate,
