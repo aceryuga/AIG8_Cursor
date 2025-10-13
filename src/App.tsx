@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { HashRouter as Router, Routes, Route } from 'react-router-dom';
 import { Header } from './components/ui/header';
 import { NavBar } from './components/ui/tubelight-navbar';
@@ -32,6 +32,7 @@ import { DocumentUpload } from './components/documents/DocumentUpload';
 import { DocumentViewer } from './components/documents/DocumentViewer';
 import { Gallery } from './pages/Gallery';
 import { SettingsPage } from './components/settings/SettingsPage';
+import AIChatbot from './components/ui/AIChatbot';
 
 
 // Landing Page Component
@@ -281,6 +282,10 @@ const LandingPage = () => {
 // Main App with Routing
 function App() {
   const { user } = useAuth();
+  
+  // Chatbot position state - can be changed dynamically
+  const [chatbotPosition, setChatbotPosition] = useState<'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'>('bottom-right');
+  
   return (
     <Router>
       <Routes>
@@ -318,6 +323,12 @@ function App() {
         {/* Settings Route */}
         <Route path="/settings" element={<SettingsPage />} />
       </Routes>
+      
+      {/* AI Chatbot Widget - Available on all pages */}
+      <AIChatbot 
+        position={chatbotPosition} 
+        onPositionChange={setChatbotPosition}
+      />
     </Router>
   );
 }
