@@ -22,7 +22,9 @@ import {
   X
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
+import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
+import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 
 interface BankTransaction {
   id: string;
@@ -143,13 +145,12 @@ const AIReconciliation: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [activeTab, setActiveTab] = useState('auto_matched');
-  const [showNotifications, setShowNotifications] = useState(false);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
@@ -248,6 +249,7 @@ const AIReconciliation: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -266,17 +268,8 @@ const AIReconciliation: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
@@ -553,7 +546,7 @@ const AIReconciliation: React.FC = () => {
                       return (
                         <tr key={payment.id} className="border-b border-white border-opacity-10 hover:bg-white hover:bg-opacity-5">
                           <td className="p-4 text-sm text-glass">
-                            {transaction ? new Date(transaction.date).toLocaleDateString() : '-'}
+                            {transaction ? formatDateDDMMYYYY(transaction.date) : '-'}
                           </td>
                           <td className="p-4 text-sm text-glass-muted max-w-xs truncate">
                             {transaction?.description || '-'}

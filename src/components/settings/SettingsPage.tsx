@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { 
   Building2, 
   LogOut, 
@@ -16,12 +16,10 @@ import {
   Eye,
   EyeOff,
   Check,
-  X,
   Download,
   Trash2,
   AlertTriangle,
   CheckCircle,
-  Clock,
   Smartphone,
   Globe,
   Calendar,
@@ -32,9 +30,36 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { NotificationBell } from '../ui/NotificationBell';
 import { PasswordStrength } from '../webapp-ui/PasswordStrength';
 import { useAuth } from '../../hooks/useAuth';
+import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 import { validateEmail, validatePhone, validatePassword } from '../../utils/validation';
+import { sanitizeText, sanitizeEmail, sanitizePhone } from '../../utils/security';
+import { ErrorAuditTest } from '../test/ErrorAuditTest';
+import { canAccessTesting } from '../../utils/adminUtils';
+import { 
+  getUserSettings, 
+  createUserSettings, 
+  updateUserSettings,
+  getSubscriptionPlans,
+  getUserSubscription,
+  getBillingHistory,
+  getLoginActivity,
+  createDataExportRequest,
+  updateUserProfile,
+  getUserProfile,
+  getActivePropertyCount,
+  updatePropertyCountInSettings,
+  changeSubscriptionPlan,
+  formatCurrency,
+  formatFileSize,
+  type UserSettings,
+  type SubscriptionPlan as UtilsSubscriptionPlan,
+  type UserSubscription,
+  type BillingHistory,
+  type LoginActivity as UtilsLoginActivity
+} from '../../utils/settingsUtils';
 
 interface ProfileForm {
   name: string;
@@ -62,82 +87,39 @@ interface NotificationSettings {
   quietEnd: string;
 }
 
-interface SubscriptionPlan {
-  name: string;
-  price: number;
-  properties: number;
-  features: string[];
-  current: boolean;
-}
 
-interface LoginActivity {
-  id: string;
-  device: string;
-  location: string;
-  timestamp: string;
-  ip: string;
-  status: 'success' | 'failed';
-}
 
-const mockPlans: SubscriptionPlan[] = [
-  {
-    name: 'Starter',
-    price: 0,
-    properties: 3,
-    features: ['Basic property management', 'Payment tracking', 'Document storage (100MB)'],
-    current: true
-  },
-  {
-    name: 'Professional',
-    price: 999,
-    properties: 15,
-    features: ['Advanced analytics', 'AI reconciliation', 'Priority support', 'Document storage (1GB)'],
-    current: false
-  },
-  {
-    name: 'Enterprise',
-    price: 2499,
-    properties: 50,
-    features: ['White-label solution', 'API access', 'Custom integrations', 'Unlimited storage'],
-    current: false
-  }
-];
-
-const mockLoginActivity: LoginActivity[] = [
-  {
-    id: '1',
-    device: 'Chrome on Windows',
-    location: 'Mumbai, India',
-    timestamp: '2025-01-15 10:30 AM',
-    ip: '192.168.1.1',
-    status: 'success'
-  },
-  {
-    id: '2',
-    device: 'Safari on iPhone',
-    location: 'Mumbai, India',
-    timestamp: '2025-01-14 08:15 PM',
-    ip: '192.168.1.2',
-    status: 'success'
-  },
-  {
-    id: '3',
-    device: 'Chrome on Android',
-    location: 'Delhi, India',
-    timestamp: '2025-01-13 02:45 PM',
-    ip: '203.192.1.5',
-    status: 'failed'
-  }
-];
+// Helper function to format login activity for display
+const formatLoginActivity = (activity: UtilsLoginActivity) => {
+  const deviceInfo = activity.device_info || `${activity.browser || 'Unknown'} on ${activity.os || 'Unknown'}`;
+  const location = activity.city && activity.country ? `${activity.city}, ${activity.country}` : 'Unknown Location';
+  const timestamp = new Date(activity.login_at).toLocaleString('en-IN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+  
+  return {
+    id: activity.id,
+    device: deviceInfo,
+    location: location,
+    timestamp: timestamp,
+    ip: activity.ip_address || 'Unknown',
+    status: activity.status
+  };
+};
 
 export const SettingsPage: React.FC = () => {
+  const { tab } = useParams<{ tab?: string }>();
   const [activeSection, setActiveSection] = useState('profile');
-  const [showNotifications, setShowNotifications] = useState(false);
   const [profileForm, setProfileForm] = useState<ProfileForm>({
-    name: 'Rajesh Kumar',
-    email: 'rajesh.kumar@example.com',
-    phone: '+91 9876543210',
-    propertyCount: 5
+    name: '',
+    email: '',
+    phone: '',
+    propertyCount: 0
   });
   const [passwordForm, setPasswordForm] = useState<PasswordForm>({
     currentPassword: '',
@@ -165,11 +147,206 @@ export const SettingsPage: React.FC = () => {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [testNotificationSent, setTestNotificationSent] = useState(false);
   
-  const { user, logout } = useAuth();
+  // Subscription plan change state
+  const [planChangeLoading, setPlanChangeLoading] = useState<string | null>(null);
+  const [planChangeMessage, setPlanChangeMessage] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  
+  // Database state
+  const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<UtilsSubscriptionPlan[]>([]);
+  const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
+  const [billingHistory, setBillingHistory] = useState<BillingHistory[]>([]);
+  const [loginActivity, setLoginActivity] = useState<UtilsLoginActivity[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  
+  const { user, logout, updatePassword } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  // Handle URL parameter changes
+  useEffect(() => {
+    if (tab) {
+      // Validate that the tab exists in our sections
+      const validTabs = ['profile', 'security', 'notifications', 'subscription', 'privacy', 'testing'];
+      if (validTabs.includes(tab)) {
+        setActiveSection(tab);
+      } else {
+        // Invalid tab, redirect to default
+        navigate('/settings/profile', { replace: true });
+      }
+    } else {
+      // No tab specified, redirect to profile
+      navigate('/settings/profile', { replace: true });
+    }
+  }, [tab, navigate]);
+
+  // Load data on component mount
+  useEffect(() => {
+    const loadSettingsData = async () => {
+      if (!user?.id) return;
+      
+      setDataLoading(true);
+      try {
+        // Load all settings data in parallel with individual error handling
+        const [
+          settings,
+          plans,
+          subscription,
+          billing,
+          activity
+        ] = await Promise.allSettled([
+          getUserSettings(user.id),
+          getSubscriptionPlans(),
+          getUserSubscription(user.id),
+          getBillingHistory(user.id),
+          getLoginActivity(user.id)
+        ]);
+
+        // Handle each result individually
+        const settingsData = settings.status === 'fulfilled' ? settings.value : null;
+        const plansData = plans.status === 'fulfilled' ? plans.value : [];
+        const subscriptionData = subscription.status === 'fulfilled' ? subscription.value : null;
+        const billingData = billing.status === 'fulfilled' ? billing.value : [];
+        const activityData = activity.status === 'fulfilled' ? activity.value : [];
+
+        // Log any errors for debugging
+        if (settings.status === 'rejected') {
+          console.warn('Failed to load user settings:', settings.reason);
+        }
+        if (plans.status === 'rejected') {
+          console.warn('Failed to load subscription plans:', plans.reason);
+        }
+        if (subscription.status === 'rejected') {
+          console.warn('Failed to load user subscription:', subscription.reason);
+        }
+        if (billing.status === 'rejected') {
+          console.warn('Failed to load billing history:', billing.reason);
+        }
+        if (activity.status === 'rejected') {
+          console.warn('Failed to load login activity:', activity.reason);
+        }
+
+        // Set user settings or create default ones
+        if (settingsData) {
+          setUserSettings(settingsData);
+          setNotificationSettings({
+            emailNotifications: settingsData.email_notifications,
+            smsNotifications: settingsData.sms_notifications,
+            paymentReminders: settingsData.payment_reminders,
+            leaseExpiry: settingsData.lease_expiry_alerts,
+            maintenanceAlerts: settingsData.maintenance_alerts,
+            marketingEmails: settingsData.marketing_emails,
+            reminderTiming: settingsData.reminder_timing,
+            quietHours: settingsData.quiet_hours_enabled,
+            quietStart: settingsData.quiet_hours_start,
+            quietEnd: settingsData.quiet_hours_end
+          });
+          setProfileForm(prev => ({
+            ...prev,
+            propertyCount: settingsData.property_count
+          }));
+        } else {
+          // Create default user settings if none exist
+          console.log('No user settings found, creating default settings...');
+          try {
+            const defaultSettings = await createUserSettings({
+              user_id: user.id,
+              email_notifications: true,
+              sms_notifications: true,
+              payment_reminders: true,
+              lease_expiry_alerts: true,
+              maintenance_alerts: true,
+              marketing_emails: false,
+              reminder_timing: '3days',
+              quiet_hours_enabled: true,
+              quiet_hours_start: '22:00',
+              quiet_hours_end: '08:00',
+              timezone: 'Asia/Kolkata',
+              language: 'en',
+              property_count: 0
+            });
+            
+            if (defaultSettings) {
+              setUserSettings(defaultSettings);
+              setNotificationSettings({
+                emailNotifications: true,
+                smsNotifications: true,
+                paymentReminders: true,
+                leaseExpiry: true,
+                maintenanceAlerts: true,
+                marketingEmails: false,
+                reminderTiming: '3days',
+                quietHours: true,
+                quietStart: '22:00',
+                quietEnd: '08:00'
+              });
+            }
+          } catch (error) {
+            console.error('Failed to create default user settings:', error);
+          }
+        }
+
+        // Set subscription data
+        setSubscriptionPlans(plansData);
+        
+        // If no subscription exists, show default "Starter" plan
+        if (!subscriptionData && plansData.length > 0) {
+          const starterPlan = plansData.find(plan => plan.name === 'Starter');
+          if (starterPlan) {
+            const defaultSubscription = {
+              id: 'default',
+              user_id: user.id,
+              plan_id: starterPlan.id,
+              status: 'trial' as const,
+              started_at: new Date().toISOString(),
+              properties_used: 0,
+              storage_used_mb: 0,
+              api_calls_used: 0,
+              plan: starterPlan
+            };
+            setUserSubscription(defaultSubscription);
+          }
+        } else {
+          setUserSubscription(subscriptionData);
+        }
+        
+        setBillingHistory(billingData);
+        setLoginActivity(activityData);
+
+        // Load user profile
+        const profile = await getUserProfile(user.id);
+        if (profile) {
+          setProfileForm(prev => ({
+            ...prev,
+            name: profile.name || '',
+            email: profile.email || '',
+            phone: profile.phone || ''
+          }));
+        }
+
+        // Fetch and update actual property count
+        const actualPropertyCount = await getActivePropertyCount(user.id);
+        setProfileForm(prev => ({
+          ...prev,
+          propertyCount: actualPropertyCount
+        }));
+
+        // Update property count in settings if it differs from actual count
+        if (settingsData && settingsData.property_count !== actualPropertyCount) {
+          await updatePropertyCountInSettings(user.id);
+        }
+
+      } catch (error) {
+        console.error('Error loading settings data:', error);
+      } finally {
+        setDataLoading(false);
+      }
+    };
+
+    loadSettingsData();
+  }, [user?.id]);
+
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
@@ -178,7 +355,11 @@ export const SettingsPage: React.FC = () => {
     { id: 'security', name: 'Password & Security', icon: Shield },
     { id: 'notifications', name: 'Notifications', icon: Bell },
     { id: 'subscription', name: 'Subscription Plan', icon: CreditCard },
-    { id: 'privacy', name: 'Data & Privacy', icon: Database }
+    { id: 'privacy', name: 'Data & Privacy', icon: Database },
+    // Only show testing section in development or for admin users
+    ...(canAccessTesting(user?.email) 
+      ? [{ id: 'testing', name: 'Error & Audit Testing', icon: AlertTriangle }] 
+      : [])
   ];
 
   const validateProfile = (): boolean => {
@@ -200,9 +381,7 @@ export const SettingsPage: React.FC = () => {
       newErrors.phone = 'Please enter a valid phone number';
     }
 
-    if (profileForm.propertyCount < 1 || profileForm.propertyCount > 50) {
-      newErrors.propertyCount = 'Property count must be between 1 and 50';
-    }
+    // Property count is auto-fetched and read-only, no validation needed
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -233,14 +412,74 @@ export const SettingsPage: React.FC = () => {
 
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!user?.id) return;
+    
+    // Sanitize form data before validation and submission
+    const sanitizedForm = {
+      ...profileForm,
+      name: sanitizeText(profileForm.name),
+      email: sanitizeEmail(profileForm.email),
+      phone: sanitizePhone(profileForm.phone),
+      propertyCount: profileForm.propertyCount // Numbers don't need sanitization
+    };
+    
+    // Update form with sanitized data
+    setProfileForm(sanitizedForm);
+    
     if (!validateProfile()) return;
 
     setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setLoading(false);
-    
-    // Show success message
-    alert('Profile updated successfully!');
+    try {
+      // Update user profile
+      const profileResult = await updateUserProfile(user.id, {
+        name: sanitizedForm.name,
+        email: sanitizedForm.email,
+        phone: sanitizedForm.phone
+      });
+
+      if (!profileResult) {
+        throw new Error('Failed to update profile');
+      }
+
+      // Update or create user settings (property count is auto-managed)
+      if (userSettings) {
+        // Only update notification settings, not property count
+        await updateUserSettings(user.id, {});
+      } else {
+        // Create settings with current property count
+        const currentPropertyCount = await getActivePropertyCount(user.id);
+        await createUserSettings({
+          user_id: user.id,
+          property_count: currentPropertyCount,
+          email_notifications: true,
+          sms_notifications: true,
+          payment_reminders: true,
+          lease_expiry_alerts: true,
+          maintenance_alerts: true,
+          marketing_emails: false,
+          reminder_timing: '3days',
+          quiet_hours_enabled: true,
+          quiet_hours_start: '22:00',
+          quiet_hours_end: '08:00',
+          timezone: 'Asia/Kolkata',
+          language: 'en'
+        });
+      }
+
+      // Reload data to reflect changes
+      const updatedSettings = await getUserSettings(user.id);
+      if (updatedSettings) {
+        setUserSettings(updatedSettings);
+      }
+
+      alert('Profile updated successfully!');
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      alert('Failed to update profile. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
@@ -248,16 +487,34 @@ export const SettingsPage: React.FC = () => {
     if (!validatePasswordForm()) return;
 
     setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setLoading(false);
-    
-    // Reset form and show success
-    setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
-    alert('Password changed successfully!');
+    try {
+      const success = await updatePassword(passwordForm.currentPassword, passwordForm.newPassword);
+      
+      if (success) {
+        // Reset form and show success
+        setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+        setPasswordStrength(validatePassword(''));
+        alert('Password changed successfully!');
+      } else {
+        alert('Failed to change password. Please check your current password and try again.');
+      }
+    } catch (error) {
+      console.error('Password change error:', error);
+      alert('An error occurred while changing your password. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleProfileChange = (field: keyof ProfileForm) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = field === 'propertyCount' ? parseInt(e.target.value) || 0 : e.target.value;
+    // Property count is read-only, don't allow changes
+    if (field === 'propertyCount') return;
+    
+    let value = e.target.value;
+    
+    // Don't sanitize during typing - only sanitize on form submission
+    // This allows users to type freely without interruption
+    
     setProfileForm(prev => ({ ...prev, [field]: value }));
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
@@ -277,18 +534,79 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleNotificationToggle = (field: keyof NotificationSettings) => {
+  const handleNotificationToggle = async (field: keyof NotificationSettings) => {
+    if (!user?.id) return;
+    
+    const newValue = !notificationSettings[field];
     setNotificationSettings(prev => ({
       ...prev,
-      [field]: !prev[field]
+      [field]: newValue
     }));
+
+    // Update in database
+    try {
+      const dbField = field === 'leaseExpiry' ? 'lease_expiry_alerts' : 
+                     field === 'quietHours' ? 'quiet_hours_enabled' :
+                     field === 'quietStart' ? 'quiet_hours_start' :
+                     field === 'quietEnd' ? 'quiet_hours_end' :
+                     field === 'reminderTiming' ? 'reminder_timing' :
+                     field === 'emailNotifications' ? 'email_notifications' :
+                     field === 'smsNotifications' ? 'sms_notifications' :
+                     field === 'paymentReminders' ? 'payment_reminders' :
+                     field === 'maintenanceAlerts' ? 'maintenance_alerts' :
+                     field === 'marketingEmails' ? 'marketing_emails' : field;
+
+      if (userSettings) {
+        await updateUserSettings(user.id, { [dbField]: newValue });
+      } else {
+        // Create settings if they don't exist
+        await createUserSettings({
+          user_id: user.id,
+          email_notifications: field === 'emailNotifications' ? newValue : true,
+          sms_notifications: field === 'smsNotifications' ? newValue : true,
+          payment_reminders: field === 'paymentReminders' ? newValue : true,
+          lease_expiry_alerts: field === 'leaseExpiry' ? newValue : true,
+          maintenance_alerts: field === 'maintenanceAlerts' ? newValue : true,
+          marketing_emails: field === 'marketingEmails' ? newValue : false,
+          reminder_timing: '3days',
+          quiet_hours_enabled: field === 'quietHours' ? newValue : true,
+          quiet_hours_start: '22:00',
+          quiet_hours_end: '08:00',
+          timezone: 'Asia/Kolkata',
+          language: 'en',
+          property_count: 0
+        });
+      }
+    } catch (error) {
+      console.error('Error updating notification settings:', error);
+      // Revert the change on error
+      setNotificationSettings(prev => ({
+        ...prev,
+        [field]: !newValue
+      }));
+    }
   };
 
-  const handleNotificationChange = (field: keyof NotificationSettings, value: string) => {
+  const handleNotificationChange = async (field: keyof NotificationSettings, value: string) => {
+    if (!user?.id) return;
+    
     setNotificationSettings(prev => ({
       ...prev,
       [field]: value
     }));
+
+    // Update in database
+    try {
+      const dbField = field === 'reminderTiming' ? 'reminder_timing' :
+                     field === 'quietStart' ? 'quiet_hours_start' :
+                     field === 'quietEnd' ? 'quiet_hours_end' : field;
+
+      if (userSettings) {
+        await updateUserSettings(user.id, { [dbField]: value });
+      }
+    } catch (error) {
+      console.error('Error updating notification settings:', error);
+    }
   };
 
   const sendTestNotification = async () => {
@@ -299,21 +617,25 @@ export const SettingsPage: React.FC = () => {
     setTimeout(() => setTestNotificationSent(false), 3000);
   };
 
-  const exportData = () => {
-    const data = {
-      profile: profileForm,
-      properties: 'Property data would be included here...',
-      payments: 'Payment history would be included here...',
-      documents: 'Document metadata would be included here...'
-    };
+  const exportData = async () => {
+    if (!user?.id) return;
     
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'propertypro-data-export.json';
-    a.click();
-    URL.revokeObjectURL(url);
+    setLoading(true);
+    try {
+      // Create data export request
+      const exportRequest = await createDataExportRequest(user.id, 'full');
+      
+      if (exportRequest) {
+        alert('Data export request submitted. You will receive an email when the export is ready for download.');
+      } else {
+        throw new Error('Failed to create export request');
+      }
+    } catch (error) {
+      console.error('Error creating data export:', error);
+      alert('Failed to create data export request. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDeleteAccount = async () => {
@@ -324,6 +646,43 @@ export const SettingsPage: React.FC = () => {
     
     // In a real app, this would delete the account and redirect
     alert('Account deletion request submitted. You will receive a confirmation email.');
+  };
+
+  const handlePlanChange = async (newPlanId: string) => {
+    if (!user?.id) return;
+    
+    setPlanChangeLoading(newPlanId);
+    setPlanChangeMessage(null);
+    
+    try {
+      const result = await changeSubscriptionPlan(user.id, newPlanId);
+      
+      if (result.success) {
+        setPlanChangeMessage({ type: 'success', message: result.message });
+        
+        // Reload subscription data to reflect changes
+        const [updatedSubscription, updatedPlans] = await Promise.all([
+          getUserSubscription(user.id),
+          getSubscriptionPlans()
+        ]);
+        
+        setUserSubscription(updatedSubscription);
+        setSubscriptionPlans(updatedPlans);
+        
+        // Clear message after 5 seconds
+        setTimeout(() => setPlanChangeMessage(null), 5000);
+      } else {
+        setPlanChangeMessage({ type: 'error', message: result.message });
+        // Clear error message after 8 seconds
+        setTimeout(() => setPlanChangeMessage(null), 8000);
+      }
+    } catch (error) {
+      console.error('Error changing plan:', error);
+      setPlanChangeMessage({ type: 'error', message: 'An unexpected error occurred. Please try again.' });
+      setTimeout(() => setPlanChangeMessage(null), 8000);
+    } finally {
+      setPlanChangeLoading(null);
+    }
   };
 
   return (
@@ -347,6 +706,7 @@ export const SettingsPage: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -363,17 +723,8 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
@@ -414,7 +765,7 @@ export const SettingsPage: React.FC = () => {
                 {sections.map((section) => (
                   <button
                     key={section.id}
-                    onClick={() => setActiveSection(section.id)}
+                    onClick={() => navigate(`/settings/${section.id}`)}
                     className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all duration-200 ${
                       activeSection === section.id
                         ? 'glass text-glass'
@@ -478,15 +829,27 @@ export const SettingsPage: React.FC = () => {
                       placeholder="+91 9876543210"
                     />
 
-                    <Input
-                      label="Property Count"
-                      type="number"
-                      value={profileForm.propertyCount}
-                      onChange={handleProfileChange('propertyCount')}
-                      error={errors.propertyCount}
-                      icon={<Building2 size={18} />}
-                      placeholder="5"
-                    />
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-glass">
+                        Active Properties
+                      </label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <Building2 size={18} className="text-glass-muted" />
+                        </div>
+                        <input
+                          type="number"
+                          value={profileForm.propertyCount}
+                          readOnly
+                          className="w-full pl-10 pr-3 py-2 glass-input rounded-lg text-glass bg-white bg-opacity-5 cursor-not-allowed"
+                          placeholder="0"
+                        />
+                      </div>
+                      <p className="text-xs text-glass-muted">
+                        This count is automatically updated based on your active properties. 
+                        It's used for subscription management and cannot be manually edited.
+                      </p>
+                    </div>
                   </div>
 
                   <div className="flex justify-end">
@@ -609,29 +972,43 @@ export const SettingsPage: React.FC = () => {
                   </div>
 
                   <div className="space-y-4">
-                    {mockLoginActivity.map((activity) => (
-                      <div key={activity.id} className="glass rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-3 h-3 rounded-full ${
-                              activity.status === 'success' ? 'bg-green-500' : 'bg-red-500'
-                            }`} />
-                            <div>
-                              <p className="font-medium text-glass">{activity.device}</p>
-                              <p className="text-sm text-glass-muted">{activity.location} • {activity.ip}</p>
+                    {dataLoading ? (
+                      <div className="text-center py-8">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-800 mx-auto"></div>
+                        <p className="text-glass-muted mt-2">Loading login activity...</p>
+                      </div>
+                    ) : loginActivity.length === 0 ? (
+                      <div className="text-center py-8">
+                        <p className="text-glass-muted">No login activity found</p>
+                      </div>
+                    ) : (
+                      loginActivity.map((activity) => {
+                        const formattedActivity = formatLoginActivity(activity);
+                        return (
+                          <div key={activity.id} className="glass rounded-lg p-4">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-3 h-3 rounded-full ${
+                                  activity.status === 'success' ? 'bg-green-500' : 'bg-red-500'
+                                }`} />
+                                <div>
+                                  <p className="font-medium text-glass">{formattedActivity.device}</p>
+                                  <p className="text-sm text-glass-muted">{formattedActivity.location} • {formattedActivity.ip}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm text-glass">{formattedActivity.timestamp}</p>
+                                <p className={`text-xs font-medium ${
+                                  activity.status === 'success' ? 'text-green-700' : 'text-red-600'
+                                }`}>
+                                  {activity.status === 'success' ? 'Successful' : 'Failed'}
+                                </p>
+                              </div>
                             </div>
                           </div>
-                          <div className="text-right">
-                            <p className="text-sm text-glass">{activity.timestamp}</p>
-                            <p className={`text-xs font-medium ${
-                              activity.status === 'success' ? 'text-green-700' : 'text-red-600'
-                            }`}>
-                              {activity.status === 'success' ? 'Successful' : 'Failed'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               </div>
@@ -678,7 +1055,7 @@ export const SettingsPage: React.FC = () => {
                               onChange={() => handleNotificationToggle(item.key as keyof NotificationSettings)}
                               className="sr-only peer"
                             />
-                            <div className="w-11 h-6 bg-white bg-opacity-20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-800"></div>
+                            <div className="w-11 h-6 bg-white bg-opacity-20 border-2 border-green-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-checked:border-green-800 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-2 after:border-green-800 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-800"></div>
                           </label>
                         </div>
                       ))}
@@ -716,7 +1093,7 @@ export const SettingsPage: React.FC = () => {
                               onChange={() => handleNotificationToggle('quietHours')}
                               className="sr-only peer"
                             />
-                            <div className="w-11 h-6 bg-white bg-opacity-20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-800"></div>
+                            <div className="w-11 h-6 bg-white bg-opacity-20 border-2 border-green-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-checked:border-green-800 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-2 after:border-green-800 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-800"></div>
                           </label>
                         </div>
 
@@ -781,6 +1158,26 @@ export const SettingsPage: React.FC = () => {
             {/* Subscription Plan */}
             {activeSection === 'subscription' && (
               <div className="space-y-6">
+                {/* Plan Change Messages */}
+                {planChangeMessage && (
+                  <div className={`glass-card rounded-xl p-4 border-l-4 ${
+                    planChangeMessage.type === 'success' 
+                      ? 'border-green-800 glass-success' 
+                      : 'border-red-600 glass-error'
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      {planChangeMessage.type === 'success' ? (
+                        <CheckCircle className="w-5 h-5 text-green-800" />
+                      ) : (
+                        <AlertTriangle className="w-5 h-5 text-red-600" />
+                      )}
+                      <p className={`font-medium text-glass`}>
+                        {planChangeMessage.message}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Current Plan */}
                 <div className="glass-card rounded-xl p-6">
                   <div className="flex items-center gap-3 mb-6">
@@ -788,63 +1185,84 @@ export const SettingsPage: React.FC = () => {
                       <CreditCard className="w-6 h-6 text-green-800" />
                     </div>
                     <div>
-                      <h2 className="text-xl font-semibold text-glass">Current Plan</h2>
-                      <p className="text-glass-muted">Manage your subscription</p>
+                      <h2 className="text-xl font-semibold text-glass">Subscription Plans</h2>
+                      <p className="text-glass-muted">Choose or change your subscription plan</p>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {mockPlans.map((plan) => (
-                      <div
-                        key={plan.name}
-                        className={`glass rounded-xl p-6 relative ${
-                          plan.current ? 'ring-2 ring-green-800' : ''
-                        }`}
-                      >
-                        {plan.current && (
-                          <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
-                            <span className="bg-green-800 text-white px-3 py-1 rounded-full text-xs font-medium">
-                              Current Plan
-                            </span>
-                          </div>
-                        )}
-                        
-                        <div className="text-center mb-4">
-                          <div className="w-12 h-12 glass rounded-lg flex items-center justify-center mx-auto mb-3">
-                            {plan.name === 'Enterprise' ? (
-                              <Crown className="w-6 h-6 text-green-800" />
-                            ) : plan.name === 'Professional' ? (
-                              <Zap className="w-6 h-6 text-green-800" />
-                            ) : (
-                              <User className="w-6 h-6 text-green-800" />
-                            )}
-                          </div>
-                          <h3 className="text-lg font-semibold text-glass">{plan.name}</h3>
-                          <div className="mt-2">
-                            <span className="text-2xl font-bold text-glass">₹{plan.price}</span>
-                            <span className="text-glass-muted">/month</span>
-                          </div>
-                          <p className="text-sm text-glass-muted mt-1">Up to {plan.properties} properties</p>
-                        </div>
-
-                        <ul className="space-y-2 mb-6">
-                          {plan.features.map((feature, index) => (
-                            <li key={index} className="flex items-center gap-2 text-sm text-glass">
-                              <Check size={14} className="text-green-700 flex-shrink-0" />
-                              {feature}
-                            </li>
-                          ))}
-                        </ul>
-
-                        <Button
-                          variant={plan.current ? 'outline' : 'primary'}
-                          className="w-full"
-                          disabled={plan.current}
-                        >
-                          {plan.current ? 'Current Plan' : 'Upgrade'}
-                        </Button>
+                    {dataLoading ? (
+                      <div className="col-span-3 text-center py-8">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-800 mx-auto"></div>
+                        <p className="text-glass-muted mt-2">Loading subscription plans...</p>
                       </div>
-                    ))}
+                    ) : (
+                      subscriptionPlans.map((plan) => {
+                        const isCurrentPlan = userSubscription?.plan_id === plan.id;
+                        const planComparison = userSubscription?.plan_id 
+                          ? { isUpgrade: plan.price > (userSubscription.plan?.price || 0), isDowngrade: plan.price < (userSubscription.plan?.price || 0), isSamePlan: false, actionText: plan.price > (userSubscription.plan?.price || 0) ? 'Upgrade' : plan.price < (userSubscription.plan?.price || 0) ? 'Downgrade' : 'Change Plan' }
+                          : { isUpgrade: false, isDowngrade: false, isSamePlan: false, actionText: 'Select Plan' };
+                        
+                        return (
+                          <div
+                            key={plan.id}
+                            className={`glass-card rounded-xl p-6 relative transition-all duration-300 ${
+                              isCurrentPlan ? 'ring-2 ring-green-800 glow' : 'hover:glow'
+                            }`}
+                          >
+                            {isCurrentPlan && (
+                              <div className="absolute -top-3 left-1/2 transform -translate-x-1/2">
+                                <span className="glass-button text-white px-3 py-1 rounded-full text-xs font-medium">
+                                  Current Plan
+                                </span>
+                              </div>
+                            )}
+                            
+                            <div className="text-center mb-4">
+                              <div className="w-12 h-12 glass rounded-lg flex items-center justify-center mx-auto mb-3 glow">
+                                {plan.name === 'Portfolio' ? (
+                                  <Crown className="w-6 h-6 text-green-800" />
+                                ) : plan.name === 'Professional' ? (
+                                  <Zap className="w-6 h-6 text-green-800" />
+                                ) : (
+                                  <User className="w-6 h-6 text-green-800" />
+                                )}
+                              </div>
+                              <h3 className="text-lg font-semibold text-glass">{plan.name}</h3>
+                              <div className="mt-2">
+                                <span className="text-2xl font-bold text-glass">{formatCurrency(plan.price)}</span>
+                                <span className="text-glass-muted">/month</span>
+                              </div>
+                              <p className="text-sm text-glass-muted mt-1">Up to {plan.properties_limit} properties</p>
+                            </div>
+
+                            <ul className="space-y-2 mb-6">
+                              {plan.features.map((feature, index) => (
+                                <li key={index} className="flex items-center gap-2 text-sm text-glass">
+                                  <Check size={14} className="text-green-800 flex-shrink-0" />
+                                  {feature}
+                                </li>
+                              ))}
+                            </ul>
+
+                            <Button
+                              variant={isCurrentPlan ? 'outline' : planComparison.isUpgrade ? 'primary' : 'outline'}
+                              className="w-full"
+                              disabled={isCurrentPlan || planChangeLoading === plan.id}
+                              loading={planChangeLoading === plan.id}
+                              onClick={() => !isCurrentPlan && handlePlanChange(plan.id)}
+                            >
+                              {isCurrentPlan 
+                                ? 'Current Plan' 
+                                : planChangeLoading === plan.id 
+                                  ? 'Processing...' 
+                                  : planComparison.actionText
+                              }
+                            </Button>
+                          </div>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
 
@@ -861,38 +1279,98 @@ export const SettingsPage: React.FC = () => {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="glass rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-glass-muted">Properties</span>
-                        <span className="text-glass font-medium">5 / 3</span>
+                    {dataLoading ? (
+                      <div className="col-span-3 text-center py-4">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-800 mx-auto"></div>
+                        <p className="text-glass-muted mt-2">Loading usage statistics...</p>
                       </div>
-                      <div className="w-full bg-white bg-opacity-20 rounded-full h-2">
-                        <div className="bg-red-500 h-2 rounded-full" style={{ width: '100%' }} />
-                      </div>
-                      <p className="text-xs text-red-600 mt-1">Upgrade needed</p>
-                    </div>
+                    ) : (
+                      <>
+                        <div className="glass-card rounded-lg p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-glass-muted">Properties</span>
+                            <span className="text-glass font-medium">
+                              {userSubscription?.properties_used || 0} / {userSubscription?.plan?.properties_limit || 3}
+                            </span>
+                          </div>
+                          <div className="w-full glass-input rounded-full h-2">
+                            {(() => {
+                              const used = userSubscription?.properties_used || 0;
+                              const limit = userSubscription?.plan?.properties_limit || 3;
+                              const percentage = Math.min((used / limit) * 100, 100);
+                              const color = percentage >= 100 ? 'bg-red-600' : percentage >= 80 ? 'bg-orange-500' : 'bg-green-800';
+                              return <div className={`${color} h-2 rounded-full`} style={{ width: `${percentage}%` }} />;
+                            })()}
+                          </div>
+                          <p className={`text-xs mt-1 ${
+                            (userSubscription?.properties_used || 0) >= (userSubscription?.plan?.properties_limit || 3) 
+                              ? 'text-red-600' 
+                              : (userSubscription?.properties_used || 0) >= (userSubscription?.plan?.properties_limit || 3) * 0.8 
+                                ? 'text-orange-600' 
+                                : 'text-green-800'
+                          }`}>
+                            {(userSubscription?.properties_used || 0) >= (userSubscription?.plan?.properties_limit || 3) 
+                              ? 'Upgrade needed' 
+                              : (userSubscription?.properties_used || 0) >= (userSubscription?.plan?.properties_limit || 3) * 0.8 
+                                ? 'Approaching limit' 
+                                : 'Within limits'}
+                          </p>
+                        </div>
 
-                    <div className="glass rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-glass-muted">Storage</span>
-                        <span className="text-glass font-medium">156 MB / 100 MB</span>
-                      </div>
-                      <div className="w-full bg-white bg-opacity-20 rounded-full h-2">
-                        <div className="bg-orange-500 h-2 rounded-full" style={{ width: '100%' }} />
-                      </div>
-                      <p className="text-xs text-orange-600 mt-1">Upgrade needed</p>
-                    </div>
+                        <div className="glass-card rounded-lg p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-glass-muted">Storage</span>
+                            <span className="text-glass font-medium">
+                              {formatFileSize((userSubscription?.storage_used_mb || 0) * 1024 * 1024)} / {
+                                userSubscription?.plan?.storage_limit_mb === -1 
+                                  ? 'Unlimited' 
+                                  : formatFileSize((userSubscription?.plan?.storage_limit_mb || 100) * 1024 * 1024)
+                              }
+                            </span>
+                          </div>
+                          <div className="w-full glass-input rounded-full h-2">
+                            {(() => {
+                              const used = userSubscription?.storage_used_mb || 0;
+                              const limit = userSubscription?.plan?.storage_limit_mb || 100;
+                              if (limit === -1) return <div className="bg-green-800 h-2 rounded-full" style={{ width: '25%' }} />;
+                              const percentage = Math.min((used / limit) * 100, 100);
+                              const color = percentage >= 100 ? 'bg-red-600' : percentage >= 80 ? 'bg-orange-500' : 'bg-green-800';
+                              return <div className={`${color} h-2 rounded-full`} style={{ width: `${percentage}%` }} />;
+                            })()}
+                          </div>
+                          <p className={`text-xs mt-1 ${
+                            userSubscription?.plan?.storage_limit_mb === -1 
+                              ? 'text-green-800'
+                              : (userSubscription?.storage_used_mb || 0) >= (userSubscription?.plan?.storage_limit_mb || 100) 
+                                ? 'text-red-600' 
+                                : (userSubscription?.storage_used_mb || 0) >= (userSubscription?.plan?.storage_limit_mb || 100) * 0.8 
+                                  ? 'text-orange-600' 
+                                  : 'text-green-800'
+                          }`}>
+                            {userSubscription?.plan?.storage_limit_mb === -1 
+                              ? 'Unlimited' 
+                              : (userSubscription?.storage_used_mb || 0) >= (userSubscription?.plan?.storage_limit_mb || 100) 
+                                ? 'Upgrade needed' 
+                                : (userSubscription?.storage_used_mb || 0) >= (userSubscription?.plan?.storage_limit_mb || 100) * 0.8 
+                                  ? 'Approaching limit' 
+                                  : 'Within limits'}
+                          </p>
+                        </div>
 
-                    <div className="glass rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-glass-muted">API Calls</span>
-                        <span className="text-glass font-medium">1,250 / ∞</span>
-                      </div>
-                      <div className="w-full bg-white bg-opacity-20 rounded-full h-2">
-                        <div className="bg-green-500 h-2 rounded-full" style={{ width: '25%' }} />
-                      </div>
-                      <p className="text-xs text-green-700 mt-1">Within limits</p>
-                    </div>
+                        <div className="glass-card rounded-lg p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-glass-muted">API Calls</span>
+                            <span className="text-glass font-medium">
+                              {(userSubscription?.api_calls_used || 0).toLocaleString()} / ∞
+                            </span>
+                          </div>
+                          <div className="w-full glass-input rounded-full h-2">
+                            <div className="bg-green-800 h-2 rounded-full" style={{ width: '25%' }} />
+                          </div>
+                          <p className="text-xs text-green-800 mt-1">Within limits</p>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -915,27 +1393,48 @@ export const SettingsPage: React.FC = () => {
                   </div>
 
                   <div className="space-y-3">
-                    {[
-                      { date: '2025-01-01', amount: 0, status: 'Paid', plan: 'Starter' },
-                      { date: '2024-12-01', amount: 0, status: 'Paid', plan: 'Starter' },
-                      { date: '2024-11-01', amount: 0, status: 'Paid', plan: 'Starter' }
-                    ].map((invoice, index) => (
-                      <div key={index} className="flex items-center justify-between p-4 glass rounded-lg">
-                        <div>
-                          <p className="font-medium text-glass">{invoice.plan} Plan</p>
-                          <p className="text-sm text-glass-muted">{new Date(invoice.date).toLocaleDateString()}</p>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <p className="font-medium text-glass">₹{invoice.amount}</p>
-                            <p className="text-sm text-green-700">{invoice.status}</p>
-                          </div>
-                          <Button variant="ghost" size="sm" className="p-2">
-                            <Download size={14} />
-                          </Button>
-                        </div>
+                    {dataLoading ? (
+                      <div className="text-center py-8">
+                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-800 mx-auto"></div>
+                        <p className="text-glass-muted mt-2">Loading billing history...</p>
                       </div>
-                    ))}
+                    ) : billingHistory.length === 0 ? (
+                      <div className="text-center py-8">
+                        <p className="text-glass-muted">No billing history found</p>
+                      </div>
+                    ) : (
+                      billingHistory.map((invoice) => (
+                        <div key={invoice.id} className="flex items-center justify-between p-4 glass-card rounded-lg">
+                          <div>
+                            <p className="font-medium text-glass">
+                              {subscriptionPlans.find(p => p.id === invoice.subscription_id)?.name || 'Unknown'} Plan
+                            </p>
+                            <p className="text-sm text-glass-muted">
+                              {formatDateDDMMYYYY(invoice.billing_period_start)} - {formatDateDDMMYYYY(invoice.billing_period_end)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div className="text-right">
+                              <p className="font-medium text-glass">{formatCurrency(invoice.amount, invoice.currency)}</p>
+                              <p className={`text-sm ${
+                                invoice.status === 'paid' ? 'text-green-800' :
+                                invoice.status === 'pending' ? 'text-orange-600' :
+                                invoice.status === 'failed' ? 'text-red-600' : 'text-glass-muted'
+                              }`}>
+                                {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
+                              </p>
+                            </div>
+                            {invoice.invoice_url && (
+                              <a href={invoice.invoice_url} target="_blank" rel="noopener noreferrer">
+                                <Button variant="ghost" size="sm" className="p-2">
+                                  <Download size={14} />
+                                </Button>
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               </div>
@@ -1055,6 +1554,37 @@ export const SettingsPage: React.FC = () => {
                     </Button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* Error & Audit Testing */}
+            {activeSection === 'testing' && (
+              <div className="glass-card rounded-xl p-6">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-12 h-12 glass rounded-lg flex items-center justify-center glow">
+                    <AlertTriangle className="w-6 h-6 text-green-800" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-semibold text-glass">Error & Audit Testing</h2>
+                    <p className="text-glass-muted">Test error handling and audit trail functionality</p>
+                  </div>
+                </div>
+
+                {/* Development/Admin Warning */}
+                <div className="mb-6 p-4 bg-yellow-100 bg-opacity-20 border border-yellow-500 border-opacity-30 rounded-lg">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <h3 className="font-medium text-yellow-800 mb-1">Development/Admin Only</h3>
+                      <p className="text-sm text-yellow-700">
+                        This testing interface is only available to developers and administrators. 
+                        It allows testing of error handling and audit trail systems.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <ErrorAuditTest />
               </div>
             )}
           </div>

@@ -1,5 +1,5 @@
-import React from 'react';
-import { HashRouter as Router, Routes, Route } from 'react-router-dom';
+import { useState } from 'react';
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Header } from './components/ui/header';
 import { NavBar } from './components/ui/tubelight-navbar';
 import { Hero } from './components/ui/animated-hero';
@@ -10,6 +10,7 @@ import { Testimonials } from './components/ui/testimonials';
 import { Pricing } from './components/ui/pricing';
 import { FaqSectionWithCategories } from './components/ui/faq-with-categories';
 import { Footerdemo } from './components/ui/footer-section';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { Home, Zap, DollarSign, MessageCircle, Building, Users, Star, Clock, TrendingUp } from 'lucide-react';
 import { useAuth } from './hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
@@ -20,6 +21,7 @@ import { SignupPage } from './components/auth/SignupPage';
 import { ResetPasswordPage } from './components/auth/ResetPasswordPage';
 import { NewPasswordPage } from './components/auth/NewPasswordPage';
 import { VerificationPage } from './components/auth/VerificationPage';
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { PropertiesList } from './components/properties/PropertiesList';
 import { PropertyDetails } from './components/properties/PropertyDetails';
@@ -30,7 +32,10 @@ import { AIReconciliation } from './components/payments/AIReconciliation';
 import { DocumentVault } from './components/documents/DocumentVault';
 import { DocumentUpload } from './components/documents/DocumentUpload';
 import { DocumentViewer } from './components/documents/DocumentViewer';
+import { Gallery } from './pages/Gallery';
 import { SettingsPage } from './components/settings/SettingsPage';
+import { GlobalLayout } from './components/layout/GlobalLayout';
+import AIChatbot from './components/ui/AIChatbot';
 
 
 // Landing Page Component
@@ -279,42 +284,137 @@ const LandingPage = () => {
 
 // Main App with Routing
 function App() {
-  const { user } = useAuth();
+  // Chatbot position state - can be changed dynamically
+  const [chatbotPosition, setChatbotPosition] = useState<'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'>('bottom-right');
+  
   return (
-    <Router>
-      <Routes>
-        {/* Landing Page */}
-        <Route path="/" element={<LandingPage />} />
+    <ErrorBoundary>
+      <Router>
+        <Routes>
+          {/* Landing Page */}
+          <Route path="/" element={<LandingPage />} />
+          
+          {/* Auth Routes - REAL PAGES! */}
+          <Route path="/auth/login" element={<LoginPage />} />
+          <Route path="/auth/signup" element={<SignupPage />} />
+          <Route path="/auth/reset" element={<ResetPasswordPage />} />
+          <Route path="/auth/new-password" element={<NewPasswordPage />} />
+          <Route path="/auth/verify" element={<VerificationPage />} />
+
+          {/* Protected Routes - Dashboard */}
+          <Route path="/dashboard" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <Dashboard />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+
+          {/* Protected Routes - Properties */}
+          <Route path="/properties" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <PropertiesList />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/properties/:id" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <PropertyDetails />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/properties/add" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <AddProperty />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+
+          {/* Protected Routes - Payments */}
+          <Route path="/payments" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <PaymentHistory />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/payments/record" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <RecordPayment />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/payments/reconciliation" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <AIReconciliation />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          
+          {/* Protected Routes - Documents */}
+          <Route path="/documents" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <DocumentVault />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/documents/upload" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <DocumentUpload />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/documents/:id" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <DocumentViewer />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+
+          {/* Protected Routes - Gallery */}
+          <Route path="/gallery" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <Gallery />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+
+          {/* Protected Routes - Settings */}
+          <Route path="/settings" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <SettingsPage />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/settings/:tab" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <SettingsPage />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+
+          {/* Catch-all route - redirect to landing page */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
         
-        {/* Auth Routes - REAL PAGES! */}
-        <Route path="/auth/login" element={<LoginPage />} />
-        <Route path="/auth/signup" element={<SignupPage />} />
-        <Route path="/auth/reset" element={<ResetPasswordPage />} />
-        <Route path="/auth/new-password" element={<NewPasswordPage />} />
-        <Route path="/auth/verify" element={<VerificationPage />} />
-
-        {/* Dashboard */}
-        <Route path="/dashboard" element={<Dashboard />} />
-
-        {/* Properties Routes */}
-        <Route path="/properties" element={<PropertiesList />} />
-        <Route path="/properties/:id" element={<PropertyDetails />} />
-        <Route path="/properties/add" element={<AddProperty />} />
-
-        {/* Payments Routes */}
-        <Route path="/payments" element={<PaymentHistory />} />
-        <Route path="/payments/record" element={<RecordPayment />} />
-        <Route path="/payments/reconciliation" element={<AIReconciliation />} />
-        
-        {/* Documents Routes */}
-        <Route path="/documents" element={<DocumentVault />} />
-        <Route path="/documents/upload" element={<DocumentUpload />} />
-        <Route path="/documents/:id" element={<DocumentViewer />} />
-
-        {/* Settings Route */}
-        <Route path="/settings" element={<SettingsPage />} />
-      </Routes>
-    </Router>
+        {/* AI Chatbot Widget - Available on all pages */}
+        <AIChatbot 
+          position={chatbotPosition} 
+          onPositionChange={setChatbotPosition}
+        />
+      </Router>
+    </ErrorBoundary>
   );
 }
 

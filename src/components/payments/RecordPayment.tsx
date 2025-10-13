@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
@@ -17,7 +17,11 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
+import { supabase } from '../../lib/supabase';
+import { formatDateDDMMYYYY, fromDateInput, getCurrentISTDateInput } from '../../utils/timezoneUtils';
+import { sanitizeText } from '../../utils/security';
 
 interface PaymentForm {
   propertyId: string;
@@ -26,6 +30,8 @@ interface PaymentForm {
   method: 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'card' | '';
   reference: string;
   notes: string;
+  paymentType: 'Rent' | 'Maintenance' | 'Security Deposit' | 'Other';
+  paymentTypeDetails: string;
 }
 
 interface Property {
@@ -33,39 +39,96 @@ interface Property {
   name: string;
   tenant: string;
   monthlyRent: number;
+  leaseId: string;
 }
-
-const mockProperties: Property[] = [
-  { id: '1', name: 'Green Valley Apartment', tenant: 'Amit Sharma', monthlyRent: 15000 },
-  { id: '2', name: 'Sunrise Villa', tenant: 'Priya Patel', monthlyRent: 25000 },
-  { id: '3', name: 'City Center Office', tenant: 'Tech Solutions Ltd', monthlyRent: 35000 },
-  { id: '4', name: 'Metro Plaza Shop', tenant: 'Fashion Hub', monthlyRent: 12000 }
-];
 
 export const RecordPayment: React.FC = () => {
   const [form, setForm] = useState<PaymentForm>({
     propertyId: '',
     amount: 0,
-    date: new Date().toISOString().split('T')[0],
+    date: getCurrentISTDateInput(), // Current date in IST for input
     method: '',
     reference: '',
-    notes: ''
+    notes: '',
+    paymentType: 'Rent',
+    paymentTypeDetails: ''
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [propertiesLoading, setPropertiesLoading] = useState(true);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    logout();
+  // Fetch properties from Supabase
+  useEffect(() => {
+    if (!user?.id) {
+      setPropertiesLoading(false);
+      return;
+    }
+
+    const fetchProperties = async () => {
+      try {
+        setPropertiesLoading(true);
+        
+        const { data, error } = await supabase
+          .from('properties')
+          .select(`
+            *,
+            leases!inner(
+              id,
+              monthly_rent,
+              is_active,
+              tenants(
+                name
+              )
+            )
+          `)
+          .eq('owner_id', user.id)
+          .eq('active', 'Y')
+          .eq('leases.is_active', true);
+
+        if (error) {
+          throw error;
+        }
+
+        const formattedProperties: Property[] = (data || []).map(prop => {
+          // Since we're using inner join and filtering for active leases, 
+          // all leases returned should be active
+          const activeLease = prop.leases?.[0]; // Take the first (and should be only) lease
+          const tenant = activeLease?.tenants;
+          
+          
+          return {
+            id: prop.id,
+            name: prop.name || 'Unnamed Property',
+            tenant: tenant?.name || 'Vacant',
+            monthlyRent: activeLease?.monthly_rent || 0,
+            leaseId: activeLease?.id || ''
+          };
+        });
+
+        setProperties(formattedProperties);
+      } catch (err: any) {
+        console.error('Error fetching properties:', err);
+        alert('Failed to load properties: ' + err.message);
+      } finally {
+        setPropertiesLoading(false);
+      }
+    };
+
+    fetchProperties();
+  }, [user?.id]);
+
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth/login');
   };
 
-  const selectedProperty = mockProperties.find(p => p.id === form.propertyId);
+  const selectedProperty = properties.find(p => p.id === form.propertyId);
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -94,47 +157,119 @@ export const RecordPayment: React.FC = () => {
       newErrors.reference = 'Transaction reference is required';
     }
 
+    if (form.paymentType === 'Other' && !form.paymentTypeDetails.trim()) {
+      newErrors.paymentTypeDetails = 'Payment details are required when "Other" is selected';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const checkForDuplicates = () => {
-    // Simulate duplicate check
-    if (selectedProperty && form.amount === selectedProperty.monthlyRent) {
-      const currentMonth = new Date().getMonth();
-      const paymentMonth = new Date(form.date).getMonth();
-      if (currentMonth === paymentMonth) {
+  const checkForDuplicates = async (): Promise<boolean> => {
+    if (!form.propertyId || !form.amount) return false;
+    
+    try {
+      const paymentDate = new Date(form.date);
+      const startOfMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth(), 1);
+      const endOfMonth = new Date(paymentDate.getFullYear(), paymentDate.getMonth() + 1, 0);
+      
+      const selectedProperty = properties.find(p => p.id === form.propertyId);
+      if (!selectedProperty?.leaseId) return false;
+
+      const { data, error } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('lease_id', selectedProperty.leaseId)
+        .eq('payment_amount', form.amount)
+        .gte('payment_date', startOfMonth.toISOString().split('T')[0])
+        .lte('payment_date', endOfMonth.toISOString().split('T')[0]);
+
+      if (error) {
+        console.warn('Error checking duplicates:', error);
+        return false;
+      }
+
+      if (data && data.length > 0) {
         setShowDuplicateWarning(true);
         return true;
       }
+    } catch (err) {
+      console.warn('Error checking duplicates:', err);
     }
+    
     return false;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Sanitize form data before validation and submission
+    const sanitizedForm = {
+      ...form,
+      reference: sanitizeText(form.reference),
+      notes: sanitizeText(form.notes),
+      paymentTypeDetails: sanitizeText(form.paymentTypeDetails),
+      amount: form.amount // Numbers don't need sanitization
+    };
+    
+    // Update form with sanitized data
+    setForm(sanitizedForm);
+    
     if (!validate()) return;
 
-    if (checkForDuplicates() && !showDuplicateWarning) {
+    const hasDuplicates = await checkForDuplicates();
+    if (hasDuplicates && !showDuplicateWarning) {
       return;
     }
 
     setLoading(true);
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    setLoading(false);
-    setSuccess(true);
-    
-    setTimeout(() => {
-      navigate('/payments');
-    }, 2000);
+    try {
+      const selectedProperty = properties.find(p => p.id === form.propertyId);
+      if (!selectedProperty?.leaseId) {
+        throw new Error('No active lease found for this property');
+      }
+
+      // Insert payment into Supabase
+      const { error } = await supabase
+        .from('payments')
+        .insert({
+          lease_id: selectedProperty.leaseId,
+          payment_amount: form.amount,
+          payment_date: fromDateInput(form.date), // Convert to UTC for storage
+          payment_method: form.method,
+          reference: form.reference || null,
+          notes: form.notes || null,
+          payment_type: form.paymentType,
+          payment_type_details: form.paymentType === 'Other' ? form.paymentTypeDetails : null,
+          status: 'completed'
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      setLoading(false);
+      setSuccess(true);
+      
+      setTimeout(() => {
+        navigate('/payments');
+      }, 2000);
+    } catch (err: any) {
+      console.error('Error recording payment:', err);
+      alert('Failed to record payment: ' + err.message);
+      setLoading(false);
+    }
   };
 
   const handleChange = (field: keyof PaymentForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    const value = field === 'amount' ? parseFloat(e.target.value) || 0 : e.target.value;
-    setForm(prev => ({ ...prev, [field]: value }));
+    let value = e.target.value;
+    
+    // Don't sanitize during typing - only sanitize on form submission
+    // This allows users to type freely without interruption
+    
+    const finalValue = field === 'amount' ? parseFloat(value) || 0 : value;
+    setForm(prev => ({ ...prev, [field]: finalValue }));
     
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
@@ -147,7 +282,7 @@ export const RecordPayment: React.FC = () => {
 
   const handlePropertyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const propertyId = e.target.value;
-    const property = mockProperties.find(p => p.id === propertyId);
+    const property = properties.find(p => p.id === propertyId);
     
     setForm(prev => ({ 
       ...prev, 
@@ -197,6 +332,7 @@ export const RecordPayment: React.FC = () => {
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
                   { name: 'Documents', path: '/documents' },
+                  { name: 'Gallery', path: '/gallery' },
                   { name: 'Settings', path: '/settings' }
                 ].map((item) => (
                   <Link
@@ -215,17 +351,8 @@ export const RecordPayment: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="relative p-2 glass rounded-lg hover:bg-white hover:bg-opacity-10 transition-all duration-200"
-                >
-                  <Bell size={18} className="text-glass" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
-                    3
-                  </span>
-                </button>
-              </div>
+              {/* Notification Bell */}
+              <NotificationBell />
 
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
@@ -303,12 +430,15 @@ export const RecordPayment: React.FC = () => {
                 <select
                   value={form.propertyId}
                   onChange={handlePropertyChange}
+                  disabled={propertiesLoading}
                   className={`w-full h-11 pl-10 pr-3 rounded-lg glass-input text-glass transition-all duration-200 ${
                     errors.propertyId ? 'border-red-400' : 'focus:border-white'
                   }`}
                 >
-                  <option value="">Select a property</option>
-                  {mockProperties.map((property) => (
+                  <option value="">
+                    {propertiesLoading ? 'Loading properties...' : 'Select a property'}
+                  </option>
+                  {properties.map((property) => (
                     <option key={property.id} value={property.id}>
                       {property.name} - {property.tenant}
                     </option>
@@ -386,6 +516,53 @@ export const RecordPayment: React.FC = () => {
                 )}
               </div>
 
+              {/* Payment Type */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-glass">Payment Type</label>
+                <div className="relative">
+                  <FileText size={18} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-glass-muted" />
+                  <select
+                    value={form.paymentType}
+                    onChange={handleChange('paymentType')}
+                    className={`w-full h-11 pl-10 pr-3 rounded-lg glass-input text-glass transition-all duration-200 ${
+                      errors.paymentType ? 'border-red-400' : 'focus:border-white'
+                    }`}
+                  >
+                    <option value="Rent">Rent</option>
+                    <option value="Maintenance">Maintenance</option>
+                    <option value="Security Deposit">Security Deposit</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                {errors.paymentType && (
+                  <p className="text-sm text-red-600">{errors.paymentType}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Payment Type Details - Only show when "Other" is selected */}
+            {form.paymentType === 'Other' && (
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-glass">Payment Details</label>
+                <div className="relative">
+                  <FileText size={18} className="absolute left-3 top-3 text-glass-muted" />
+                  <textarea
+                    value={form.paymentTypeDetails}
+                    onChange={handleChange('paymentTypeDetails')}
+                    placeholder="Please specify the payment type details..."
+                    className={`w-full pl-10 pr-3 py-3 rounded-lg glass-input text-glass transition-all duration-200 resize-none ${
+                      errors.paymentTypeDetails ? 'border-red-400' : 'focus:border-white'
+                    }`}
+                    rows={3}
+                  />
+                </div>
+                {errors.paymentTypeDetails && (
+                  <p className="text-sm text-red-600">{errors.paymentTypeDetails}</p>
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Reference Number */}
               <Input
                 label={`Reference ${form.method === 'cheque' ? '(Cheque Number)' : form.method === 'bank_transfer' ? '(Transaction ID)' : '(Optional)'}`}
@@ -434,7 +611,7 @@ export const RecordPayment: React.FC = () => {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-glass-muted">Date:</span>
-                    <span className="text-glass">{new Date(form.date).toLocaleDateString()}</span>
+                    <span className="text-glass">{formatDateDDMMYYYY(form.date)}</span>
                   </div>
                   {form.method && (
                     <div className="flex justify-between">

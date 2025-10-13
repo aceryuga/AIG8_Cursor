@@ -1,0 +1,47 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "18"
+  # Disable secrets scanning for VITE_ variables (they're public by design)
+  SECRETS_SCAN_ENABLED = "false"
+
+# Configure build processing
+[build.processing]
+  skip_processing = false
+
+[build.processing.css]
+  bundle = true
+  minify = true
+
+[build.processing.js]
+  bundle = true
+  minify = true
+
+# Headers for proper MIME types
+[[headers]]
+  for = "*.js"
+  [headers.values]
+    Content-Type = "application/javascript; charset=utf-8"
+
+[[headers]]
+  for = "*.mjs"
+  [headers.values]
+    Content-Type = "application/javascript; charset=utf-8"
+
+[[headers]]
+  for = "*.css"
+  [headers.values]
+    Content-Type = "text/css; charset=utf-8"
+
+# SPA redirects - must be last
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[dev]
+  command = "npm run dev"
+  port = 5173
+  publish = "dist"

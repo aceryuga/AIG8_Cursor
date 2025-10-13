@@ -74,7 +74,7 @@ function Hero() {
                       key={index}
                       className="absolute inset-0 text-[#ec632f] text-left italic"
                       style={{ fontFamily: 'Orpheus Pro, Aptos' }}
-                      initial={{ opacity: 0, y: "-100" }}
+                      initial={{ opacity: 0, y: -100 }}
                       transition={{ type: "spring", stiffness: 50 }}
                       animate={
                         titleNumber === index

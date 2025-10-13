@@ -24,6 +24,7 @@ import {
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { useAuth } from '../../hooks/useAuth';
+import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 
 interface OnboardingData {
   // Property Basics
@@ -618,7 +619,7 @@ export const OnboardingWizard: React.FC = () => {
                     <div className="flex justify-between">
                       <span className="text-glass-muted">Lease Period:</span>
                       <span className="text-glass">
-                        {new Date(data.leaseStartDate).toLocaleDateString()} - {new Date(data.leaseEndDate).toLocaleDateString()}
+                        {formatDateDDMMYYYY(data.leaseStartDate)} - {formatDateDDMMYYYY(data.leaseEndDate)}
                       </span>
                     </div>
                   </div>
