@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { AuthLayout } from './AuthLayout';
 import { Input } from '../webapp-ui/Input';
 import { Button } from '../webapp-ui/Button';
 import { useAuth } from '../../hooks/useAuth';
 import { validateEmail } from '../../utils/validation';
+import { sanitizeEmail } from '../../utils/security';
 import { LoginForm } from '../../types/auth';
 
 export const LoginPage: React.FC = () => {
@@ -19,6 +20,7 @@ export const LoginPage: React.FC = () => {
   
   const { loading, error, login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleDemoLogin = () => {
     setForm({
@@ -49,16 +51,29 @@ export const LoginPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Sanitize email before validation and submission
+    const sanitizedForm = {
+      ...form,
+      email: sanitizeEmail(form.email)
+    };
+    
+    // Update form with sanitized email
+    setForm(sanitizedForm);
+    
     if (!validate()) return;
 
-    const success = await login(form);
+    const success = await login(sanitizedForm);
     if (success) {
       // Check if this is a first-time user (you can implement this logic based on your needs)
       //const isFirstTime = !localStorage.getItem('propertypro_onboarded');
       //if (isFirstTime) {
        // navigate('/onboarding');
       //} else {
-        navigate('/dashboard');
+      
+      // Redirect to the intended destination or dashboard
+      const from = location.state?.from?.pathname || '/dashboard';
+      navigate(from, { replace: true });
       //}
     }
   };
@@ -131,6 +146,13 @@ export const LoginPage: React.FC = () => {
             Forgot password?
           </Link>
         </div>
+
+        {/* Display authentication errors */}
+        {error && (
+          <div className="p-3 rounded-lg bg-red-50 border border-red-200">
+            <p className="text-sm text-red-600">{error}</p>
+          </div>
+        )}
 
         <div className="space-y-3">
           <Button

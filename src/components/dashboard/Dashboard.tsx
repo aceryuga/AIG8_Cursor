@@ -245,28 +245,35 @@ export const Dashboard: React.FC = () => {
         }
 
         // Fetch recent communication logs
-        const { data: communicationData, error: communicationError } = await supabase
-          .from('communication_log')
-          .select(`
-            id,
-            mode,
-            message,
-            sent_at,
-            properties!inner(
+        let communicationData = null;
+        try {
+          const { data, error: communicationError } = await supabase
+            .from('communication_log')
+            .select(`
               id,
-              name,
-              owner_id
-            ),
-            tenants(
-              name
-            )
-          `)
-          .eq('properties.owner_id', user.id)
-          .order('sent_at', { ascending: false })
-          .limit(10);
+              mode,
+              message,
+              sent_at,
+              properties!inner(
+                id,
+                name,
+                owner_id
+              ),
+              tenants(
+                name
+              )
+            `)
+            .eq('properties.owner_id', user.id)
+            .order('sent_at', { ascending: false })
+            .limit(10);
 
-        if (communicationError) {
-          console.warn('Error fetching communication logs:', communicationError);
+          if (communicationError) {
+            console.warn('Error fetching communication logs:', communicationError);
+          } else {
+            communicationData = data;
+          }
+        } catch (error) {
+          console.warn('Communication logs table may not exist or have permission issues:', error);
         }
 
         // Fetch recent rental increases
@@ -557,7 +564,8 @@ export const Dashboard: React.FC = () => {
       lease_id: (payment.leases as any)?.id || '',
       payment_date: payment.payment_date,
       payment_amount: payment.payment_amount,
-      status: payment.status as 'completed' | 'pending' | 'failed'
+      status: payment.status as 'completed' | 'pending' | 'failed',
+      payment_type: payment.payment_type
     }));
     
     // Calculate rent status
@@ -621,7 +629,8 @@ export const Dashboard: React.FC = () => {
     lease_id: (payment.leases as any)?.id || '',
     payment_date: payment.payment_date,
     payment_amount: payment.payment_amount,
-    status: payment.status as 'completed' | 'pending' | 'failed'
+    status: payment.status as 'completed' | 'pending' | 'failed',
+    payment_type: payment.payment_type
   }));
 
 

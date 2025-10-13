@@ -7,6 +7,7 @@ import { Button } from '../webapp-ui/Button';
 import { PasswordStrength } from '../webapp-ui/PasswordStrength';
 import { useAuth } from '../../hooks/useAuth';
 import { validateEmail, validatePhone, validatePassword } from '../../utils/validation';
+import { sanitizeText, sanitizeEmail, sanitizePhone } from '../../utils/security';
 import { SignupForm } from '../../types/auth';
 
 export const SignupPage: React.FC = () => {
@@ -69,11 +70,24 @@ export const SignupPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Sanitize form data before validation and submission
+    const sanitizedForm = {
+      ...form,
+      name: sanitizeText(form.name),
+      email: sanitizeEmail(form.email),
+      phone: sanitizePhone(form.phone),
+      propertyCount: form.propertyCount // Numbers don't need sanitization
+    };
+    
+    // Update form with sanitized data
+    setForm(sanitizedForm);
+    
     if (!validate()) return;
 
-    const success = await signup(form);
+    const success = await signup(sanitizedForm);
     if (success) {
-      navigate('/auth/verify', { state: { email: form.email } });
+      navigate('/auth/verify', { state: { email: sanitizedForm.email } });
     }
   };
 
