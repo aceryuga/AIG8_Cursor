@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Phone, Mail, Building2, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2 } from 'lucide-react';
+import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Phone, Mail, Building2, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2, AlertCircle, X } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
@@ -12,6 +12,7 @@ import { updatePropertyCountInSettings } from '../../utils/settingsUtils';
 import { ImageWithFallback } from '../ui/ImageWithFallback';
 import { NotificationBell } from '../ui/NotificationBell';
 import { PaymentService } from '../../services/paymentService';
+import { MessageComposer } from '../ui/MessageComposer';
 
 interface Property {
   id: string;
@@ -26,7 +27,7 @@ interface Property {
   leaseStatus?: any;
   image: string;
   dueDate: string;
-  propertyType: 'apartment' | 'villa' | 'office' | 'shop';
+  propertyType: 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa';
   bedrooms?: number;
   area: number;
 }
@@ -70,6 +71,10 @@ export const PropertiesList: React.FC = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [messageModalOpen, setMessageModalOpen] = useState(false);
+  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [propertyToDelete, setPropertyToDelete] = useState<Property | null>(null);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -188,7 +193,7 @@ export const PropertiesList: React.FC = () => {
             prop.property_images[0]?.image_url || 
             '/placeholder-property.jpg' : '/placeholder-property.jpg',
           dueDate: activeLease?.end_date || 'No lease',
-          propertyType: (prop.property_type as 'apartment' | 'villa' | 'office' | 'shop') || 'apartment',
+          propertyType: (prop.property_type as 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa') || 'apartment',
           bedrooms: prop.bedrooms || 1,
           area: prop.area || 0
         };
@@ -305,6 +310,33 @@ export const PropertiesList: React.FC = () => {
     navigate('/auth/login');
   };
 
+  const handleOpenMessageModal = (property: Property) => {
+    setSelectedProperty(property);
+    setMessageModalOpen(true);
+  };
+
+  const handleCloseMessageModal = () => {
+    setMessageModalOpen(false);
+    setSelectedProperty(null);
+  };
+
+  const handleOpenDeleteConfirm = (property: Property) => {
+    setPropertyToDelete(property);
+    setShowDeleteConfirm(true);
+  };
+
+  const handleCloseDeleteConfirm = () => {
+    setShowDeleteConfirm(false);
+    setPropertyToDelete(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (propertyToDelete) {
+      await deleteProperty(propertyToDelete.id);
+      handleCloseDeleteConfirm();
+    }
+  };
+
   const filteredProperties = properties.filter(property => {
     const matchesSearch = property.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          property.address.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -375,11 +407,17 @@ export const PropertiesList: React.FC = () => {
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         <div className="absolute bottom-3 left-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
           <div className="flex gap-2">
-            <Button size="sm" className="flex-1 text-xs">
-              <Phone size={12} className="mr-1" />
-              Call
-            </Button>
-            <Button size="sm" variant="outline" className="flex-1 text-xs">
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="flex-1 text-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleOpenMessageModal(property);
+              }}
+              disabled={property.status === 'vacant'}
+              title={property.status === 'vacant' ? 'No tenant to message' : 'Send message to tenant'}
+            >
               <Mail size={12} className="mr-1" />
               Message
             </Button>
@@ -389,9 +427,7 @@ export const PropertiesList: React.FC = () => {
               className="text-xs text-red-600 hover:bg-red-50 hover:border-red-300"
               onClick={(e) => {
                 e.stopPropagation();
-                if (window.confirm('Are you sure you want to delete this property?')) {
-                  deleteProperty(property.id);
-                }
+                handleOpenDeleteConfirm(property);
               }}
             >
               <Trash2 size={12} />
@@ -495,21 +531,20 @@ export const PropertiesList: React.FC = () => {
             </div>
             
             <div className="flex gap-2">
-              <Button size="sm" variant="outline">
-                <Phone size={14} />
-              </Button>
-              <Button size="sm" variant="outline">
+              <Button 
+                size="sm" 
+                variant="outline"
+                onClick={() => handleOpenMessageModal(property)}
+                disabled={property.status === 'vacant'}
+                title={property.status === 'vacant' ? 'No tenant to message' : 'Send message to tenant'}
+              >
                 <Mail size={14} />
               </Button>
               <Button 
                 size="sm" 
                 variant="outline"
                 className="text-red-600 hover:bg-red-50 hover:border-red-300"
-                onClick={() => {
-                  if (window.confirm('Are you sure you want to delete this property?')) {
-                    deleteProperty(property.id);
-                  }
-                }}
+                onClick={() => handleOpenDeleteConfirm(property)}
               >
                 <Trash2 size={14} />
               </Button>
@@ -695,9 +730,16 @@ export const PropertiesList: React.FC = () => {
                   >
                     <option value="all">All Types</option>
                     <option value="apartment">Apartment</option>
-                    <option value="villa">Villa</option>
+                    <option value="co-working-space">Co-working Space</option>
+                    <option value="duplex">Duplex</option>
+                    <option value="independent-house">Independent House</option>
                     <option value="office">Office</option>
+                    <option value="penthouse">Penthouse</option>
+                    <option value="retail-space">Retail Space</option>
+                    <option value="serviced-apartment">Serviced Apartment</option>
                     <option value="shop">Shop</option>
+                    <option value="studio-apartment">Studio Apartment</option>
+                    <option value="villa">Villa</option>
                   </select>
                 </div>
 
@@ -777,6 +819,64 @@ export const PropertiesList: React.FC = () => {
           </div>
         )}
       </main>
+
+      {/* Message Composer Modal */}
+      {selectedProperty && (
+        <MessageComposer
+          isOpen={messageModalOpen}
+          onClose={handleCloseMessageModal}
+          propertyId={selectedProperty.id}
+          propertyName={selectedProperty.name}
+          tenantId={supabaseProperties.find(p => p.id === selectedProperty.id)?.leases?.[0]?.tenants ? 
+            (supabaseProperties.find(p => p.id === selectedProperty.id)?.leases?.[0] as any)?.tenant_id : 
+            undefined
+          }
+          tenantName={selectedProperty.tenant}
+          tenantEmail={selectedProperty.tenantEmail}
+        />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && propertyToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="glass-card rounded-xl max-w-md w-full shadow-2xl">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 bg-red-100 rounded-lg flex items-center justify-center">
+                  <AlertCircle className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-glass">Delete Property</h3>
+                  <p className="text-glass-muted">This action cannot be undone</p>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <p className="text-glass-muted">
+                  Are you sure you want to delete "{propertyToDelete.name}"? This will permanently remove 
+                  the property and all associated data including payment history and documents.
+                </p>
+                
+                <div className="flex gap-3">
+                  <Button
+                    onClick={handleCloseDeleteConfirm}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={handleConfirmDelete}
+                    className="flex-1 bg-red-600 hover:bg-red-700"
+                  >
+                    Delete Property
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

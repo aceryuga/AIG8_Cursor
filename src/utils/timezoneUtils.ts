@@ -147,21 +147,16 @@ export const getRelativeTime = (dateString: string): string => {
 
 /**
  * Get relative time for Recent Activity (handles UTC timestamps correctly)
- * @param dateString - Date string from Supabase (stored in UTC)
+ * @param dateString - Date string from Supabase (stored in UTC with timezone)
  * @returns Relative time string
  */
 export const getRecentActivityTime = (dateString: string): string => {
-  // For Recent Activity, treat all timestamps as UTC since Supabase stores them in UTC
-  // even when they don't have timezone info
+  // All timestamps from Supabase should now be timestamptz (timestamp with time zone)
+  // They will be returned with timezone info (e.g., "2025-10-20 18:24:43.167+00")
   let date: Date;
   
-  if (dateString.endsWith('Z') || dateString.includes('+') || dateString.includes('T')) {
-    // Already has timezone info, parse as-is
-    date = new Date(dateString);
-  } else {
-    // No timezone info - treat as UTC (Supabase stores timestamps in UTC)
-    date = new Date(dateString + 'Z');
-  }
+  // Parse the timestamp - now all should have timezone info
+  date = new Date(dateString);
   
   const now = new Date();
   
@@ -174,8 +169,19 @@ export const getRecentActivityTime = (dateString: string): string => {
   // Calculate difference in milliseconds
   const diffInMs = now.getTime() - date.getTime();
   
-  // Handle future dates
-  if (diffInMs < 0) {
+  // Debug logging (can be removed in production)
+  // Uncomment below for debugging timezone issues:
+  // console.log('getRecentActivityTime:', {
+  //   input: dateString,
+  //   parsed: date.toISOString(),
+  //   now: now.toISOString(),
+  //   diffInMs,
+  //   diffInMinutes: Math.floor(diffInMs / (1000 * 60)),
+  //   diffInHours: Math.floor(diffInMs / (1000 * 60 * 60))
+  // });
+  
+  // Handle future dates (with small buffer for clock skew)
+  if (diffInMs < -60000) { // Allow 1 minute buffer for clock differences
     const futureDays = Math.ceil(Math.abs(diffInMs) / (1000 * 60 * 60 * 24));
     return `In ${futureDays} day${futureDays > 1 ? 's' : ''}`;
   }
@@ -254,7 +260,9 @@ export const toDateTimeInputValue = (utcDateString: string): string => {
  * @returns ISO string in UTC format
  */
 export const fromDateInput = (dateInputValue: string): string => {
-  const localDate = new Date(dateInputValue + 'T00:00:00');
+  // Create date in user's timezone at noon to avoid timezone conversion issues
+  // This ensures the date stays the same regardless of timezone
+  const localDate = new Date(dateInputValue + 'T12:00:00');
   return toUTC(localDate);
 };
 

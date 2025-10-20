@@ -14,6 +14,15 @@ import { ImageWithFallback } from '../ui/ImageWithFallback';
 import { PropertyGallery } from './PropertyGallery';
 import { PropertyImage } from '../../utils/propertyImages';
 import { PaymentService } from '../../services/paymentService';
+import { MessageComposer } from '../ui/MessageComposer';
+import { 
+  calculateEndDate, 
+  validateLeaseDates, 
+  LeaseDuration, 
+  formatDuration,
+  getDurationFromMonths,
+  calculateDurationMonths
+} from '../../utils/leaseDuration';
 
 interface Property {
   id: string;
@@ -28,7 +37,7 @@ interface Property {
   leaseStatus?: any;
   image: string;
   dueDate: string;
-  propertyType: 'apartment' | 'villa' | 'office' | 'shop';
+  propertyType: 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa';
   bedrooms?: number;
   area: number;
   description: string;
@@ -77,6 +86,7 @@ interface EditPropertyForm {
   tenantEmail: string;
   leaseStart: string;
   leaseEnd: string;
+  leaseDuration: LeaseDuration;
 }
 
 interface Document {
@@ -114,6 +124,7 @@ export const PropertyDetails: React.FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeleteTenantConfirm, setShowDeleteTenantConfirm] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [messageModalOpen, setMessageModalOpen] = useState(false);
   
   // Supabase data states
   const [property, setProperty] = useState<Property | null>(null);
@@ -150,7 +161,8 @@ export const PropertyDetails: React.FC = () => {
     tenantPhone: '',
     tenantEmail: '',
     leaseStart: '',
-    leaseEnd: ''
+    leaseEnd: '',
+    leaseDuration: { value: 1, unit: 'years' }
   });
   const [originalProperty, setOriginalProperty] = useState<Property | null>(null);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
@@ -324,7 +336,7 @@ export const PropertyDetails: React.FC = () => {
               data.property_images[0]?.image_url || 
               '/placeholder-currentProperty.jpg' : '/placeholder-currentProperty.jpg',
             dueDate: activeLease?.end_date || 'No lease',
-            propertyType: (data.property_type as 'apartment' | 'villa' | 'office' | 'shop') || 'apartment',
+            propertyType: (data.property_type as 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa') || 'apartment',
             bedrooms: data.bedrooms || 1,
             area: data.area || 0,
             description: data.description || '',
@@ -585,12 +597,12 @@ export const PropertyDetails: React.FC = () => {
     alert(`${contactForm.method === 'email' ? 'Email' : contactForm.method === 'sms' ? 'SMS' : 'WhatsApp message'} sent successfully!`);
   };
 
-  const handleCall = () => {
-    window.open(`tel:${currentProperty.tenantPhone}`, '_self');
+  const handleOpenMessageModal = () => {
+    setMessageModalOpen(true);
   };
 
-  const handleEmail = () => {
-    window.open(`mailto:${currentProperty.tenantEmail}`, '_self');
+  const handleCloseMessageModal = () => {
+    setMessageModalOpen(false);
   };
 
   const handleUploadDocument = async () => {
@@ -669,6 +681,13 @@ export const PropertyDetails: React.FC = () => {
     // Store original property data for cancel functionality
     setOriginalProperty({ ...property });
     
+    // Calculate lease duration from existing dates
+    let leaseDuration: LeaseDuration = { value: 1, unit: 'years' };
+    if (property.leaseStart && property.leaseEnd) {
+      const months = calculateDurationMonths(property.leaseStart, property.leaseEnd);
+      leaseDuration = getDurationFromMonths(months);
+    }
+    
     // Populate edit form with current property data
     setEditForm({
       name: property.name,
@@ -682,14 +701,73 @@ export const PropertyDetails: React.FC = () => {
       tenantPhone: property.tenantPhone || '',
       tenantEmail: property.tenantEmail || '',
       leaseStart: property.leaseStart || '',
-      leaseEnd: property.leaseEnd || ''
+      leaseEnd: property.leaseEnd || '',
+      leaseDuration
     });
     
     setIsEditMode(true);
   };
 
+  // Handle lease start date change and auto-calculate end date
+  const handleEditLeaseStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const startDate = e.target.value;
+    setEditForm(prev => {
+      const newForm = { ...prev, leaseStart: startDate };
+      
+      // Auto-calculate end date if duration is not custom
+      if (startDate && prev.leaseDuration.unit !== 'custom') {
+        newForm.leaseEnd = calculateEndDate(startDate, prev.leaseDuration);
+      }
+      
+      return newForm;
+    });
+  };
+
+  // Handle lease duration change and auto-calculate end date
+  const handleEditLeaseDurationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const [value, unit] = e.target.value.split('-');
+    const duration: LeaseDuration = {
+      value: parseInt(value),
+      unit: unit as 'months' | 'years' | 'custom'
+    };
+    
+    setEditForm(prev => {
+      const newForm = { ...prev, leaseDuration: duration };
+      
+      // Auto-calculate end date if duration is not custom and start date is set
+      if (prev.leaseStart && duration.unit !== 'custom') {
+        newForm.leaseEnd = calculateEndDate(prev.leaseStart, duration);
+      }
+      
+      return newForm;
+    });
+  };
+
+  // Handle manual lease end date change - set duration to custom
+  const handleEditLeaseEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const endDate = e.target.value;
+    setEditForm(prev => {
+      const newForm = { ...prev, leaseEnd: endDate };
+      
+      // When user manually changes end date, always set to custom
+      // Use value: 0 to match the dropdown option "0-custom"
+      newForm.leaseDuration = { value: 0, unit: 'custom' };
+      
+      return newForm;
+    });
+  };
+
   const handleSaveChanges = async () => {
     if (!property) return;
+    
+    // Validate lease dates if tenant info is provided
+    if (editForm.tenantName.trim() && editForm.leaseStart && editForm.leaseEnd) {
+      const dateValidationError = validateLeaseDates(editForm.leaseStart, editForm.leaseEnd);
+      if (dateValidationError) {
+        alert(`Lease date validation error: ${dateValidationError}`);
+        return;
+      }
+    }
     
     setLoading(true);
     try {
@@ -904,7 +982,8 @@ export const PropertyDetails: React.FC = () => {
       tenantPhone: '',
       tenantEmail: '',
       leaseStart: '',
-      leaseEnd: ''
+      leaseEnd: '',
+      leaseDuration: { value: 1, unit: 'years' }
     });
   };
 
@@ -1342,7 +1421,7 @@ export const PropertyDetails: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                   <div className="glass rounded-lg p-3">
                     <p className="text-2xl font-bold text-glass">{currentProperty.area || 0}</p>
-                    <p className="text-sm text-glass-muted">Sq Ft</p>
+                    <p className="text-sm text-glass-muted">sq ft</p>
                   </div>
                   {currentProperty.bedrooms && (
                     <div className="glass rounded-lg p-3">
@@ -1359,7 +1438,7 @@ export const PropertyDetails: React.FC = () => {
                   </div>
                   <div className="glass rounded-lg p-3">
                     <p className="text-2xl font-bold text-glass">{currentProperty.area || 0}</p>
-                    <p className="text-sm text-glass-muted">Sq Ft</p>
+                    <p className="text-sm text-glass-muted">sq ft</p>
                   </div>
                   {currentProperty.bedrooms && (
                     <div className="glass rounded-lg p-3">
@@ -1384,9 +1463,15 @@ export const PropertyDetails: React.FC = () => {
                   <CreditCard size={16} />
                   Record Payment
                 </Button>
-                <Button variant="outline" className="flex items-center gap-2" onClick={() => setShowContactTenant(true)}>
-                  <Phone size={16} />
-                  Contact Tenant
+                <Button 
+                  variant="outline" 
+                  className="flex items-center gap-2" 
+                  onClick={handleOpenMessageModal}
+                  disabled={currentProperty.status === 'vacant'}
+                  title={currentProperty.status === 'vacant' ? 'No tenant to message' : 'Send message to tenant'}
+                >
+                  <Mail size={16} />
+                  Message Tenant
                 </Button>
               </div>
             </div>
@@ -1754,6 +1839,10 @@ export const PropertyDetails: React.FC = () => {
                             onChange={(e) => setEditForm(prev => ({ ...prev, rent: parseFloat(e.target.value) || 0 }))}
                             icon={<IndianRupee size={18} />}
                             placeholder="Enter monthly rent"
+                            numericType="monetary"
+                            min={0}
+                            max={10000000}
+                            required
                           />
 
                           <Input
@@ -1763,6 +1852,9 @@ export const PropertyDetails: React.FC = () => {
                             onChange={(e) => setEditForm(prev => ({ ...prev, securityDeposit: parseFloat(e.target.value) || 0 }))}
                             icon={<IndianRupee size={18} />}
                             placeholder="Enter security deposit"
+                            numericType="monetary"
+                            min={0}
+                            max={100000000}
                           />
 
                           <Input
@@ -1772,25 +1864,93 @@ export const PropertyDetails: React.FC = () => {
                             onChange={(e) => setEditForm(prev => ({ ...prev, maintenanceCharges: parseFloat(e.target.value) || 0 }))}
                             icon={<IndianRupee size={18} />}
                             placeholder="Enter maintenance charges"
+                            numericType="monetary"
+                            min={0}
+                            max={100000000}
                           />
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <Input
-                            label="Lease Start Date"
-                            type="date"
-                            value={editForm.leaseStart}
-                            onChange={(e) => setEditForm(prev => ({ ...prev, leaseStart: e.target.value }))}
-                            icon={<Calendar size={18} />}
-                          />
+                        <div className="space-y-6">
+                          <h4 className="font-medium text-glass">Lease Details</h4>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <Input
+                              label="Lease Start Date"
+                              type="date"
+                              value={editForm.leaseStart}
+                              onChange={handleEditLeaseStartChange}
+                              icon={<Calendar size={18} />}
+                            />
 
-                          <Input
-                            label="Lease End Date"
-                            type="date"
-                            value={editForm.leaseEnd}
-                            onChange={(e) => setEditForm(prev => ({ ...prev, leaseEnd: e.target.value }))}
-                            icon={<Calendar size={18} />}
-                          />
+                            <div className="space-y-2">
+                              <label className="block text-sm font-medium text-glass">Lease Duration</label>
+                              <select
+                                value={`${editForm.leaseDuration.value}-${editForm.leaseDuration.unit}`}
+                                onChange={handleEditLeaseDurationChange}
+                                className="w-full h-11 px-3 rounded-lg glass-input text-glass transition-all duration-200"
+                              >
+                                <option value="6-months">6 Months</option>
+                                <option value="11-months">11 Months</option>
+                                <option value="1-years">1 Year</option>
+                                <option value="2-years">2 Years</option>
+                                <option value="3-years">3 Years</option>
+                                <option value="5-years">5 Years</option>
+                                <option value="0-custom">Custom</option>
+                              </select>
+                              <p className="text-xs text-glass-muted">
+                                {editForm.leaseDuration.unit === 'custom' 
+                                  ? 'Manually adjust end date below' 
+                                  : 'End date will be calculated automatically'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <Input
+                              label="Lease End Date"
+                              type="date"
+                              value={editForm.leaseEnd}
+                              onChange={handleEditLeaseEndChange}
+                              icon={<Calendar size={18} />}
+                            />
+
+                            {editForm.leaseStart && editForm.leaseEnd && (
+                              <div className="flex items-end">
+                                <div className="glass rounded-lg p-3 w-full">
+                                  <p className="text-sm text-glass-muted mb-1">Calculated Duration</p>
+                                  <p className="text-lg font-semibold text-glass">
+                                    {editForm.leaseDuration.unit === 'custom' 
+                                      ? (() => {
+                                          const months = calculateDurationMonths(editForm.leaseStart, editForm.leaseEnd);
+                                          return `Custom (${months} ${months === 1 ? 'month' : 'months'})`;
+                                        })()
+                                      : formatDuration(editForm.leaseDuration)
+                                    }
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {editForm.leaseStart && editForm.leaseEnd && (
+                            <>
+                              {validateLeaseDates(editForm.leaseStart, editForm.leaseEnd) ? (
+                                <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                                  <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                                  <p className="text-sm text-red-600">
+                                    {validateLeaseDates(editForm.leaseStart, editForm.leaseEnd)}
+                                  </p>
+                                </div>
+                              ) : (
+                                <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-2">
+                                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                                  <p className="text-sm text-green-600">
+                                    Lease period: {new Date(editForm.leaseStart).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} to {new Date(editForm.leaseEnd).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                  </p>
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1809,13 +1969,9 @@ export const PropertyDetails: React.FC = () => {
                     <div className="flex items-center justify-between">
                       <h3 className="text-lg font-semibold text-glass">Tenant Information</h3>
                       <div className="flex gap-2">
-                        <Button variant="outline" className="flex items-center gap-2" onClick={handleCall}>
-                          <Phone size={16} />
-                          Call
-                        </Button>
-                        <Button variant="outline" className="flex items-center gap-2" onClick={handleEmail}>
+                        <Button variant="outline" className="flex items-center gap-2" onClick={handleOpenMessageModal}>
                           <Mail size={16} />
-                          Email
+                          Message
                         </Button>
                         <Button 
                           variant="outline" 
@@ -1931,6 +2087,10 @@ export const PropertyDetails: React.FC = () => {
                     onChange={(e) => setPaymentForm(prev => ({ ...prev, amount: parseFloat(e.target.value) || 0 }))}
                     icon={<IndianRupee size={18} />}
                     placeholder="Enter amount"
+                    numericType="monetary"
+                    min={0}
+                    max={100000000}
+                    required
                   />
 
                   <Input
@@ -2386,6 +2546,19 @@ export const PropertyDetails: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Message Composer Modal */}
+      {currentProperty && (
+        <MessageComposer
+          isOpen={messageModalOpen}
+          onClose={handleCloseMessageModal}
+          propertyId={currentProperty.id}
+          propertyName={currentProperty.name}
+          tenantId={leaseId}
+          tenantName={currentProperty.tenant}
+          tenantEmail={currentProperty.tenantEmail}
+        />
       )}
 
     </div>

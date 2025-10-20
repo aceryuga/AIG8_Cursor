@@ -6,36 +6,30 @@ import {
   Bell, 
   HelpCircle, 
   User, 
-  Settings as SettingsIcon,
   Mail,
   Phone,
   Lock,
   Shield,
   CreditCard,
-  Database,
   Eye,
   EyeOff,
   Check,
-  X,
-  Download,
   Trash2,
   AlertTriangle,
-  CheckCircle,
-  Clock,
   Smartphone,
-  Globe,
   Calendar,
   BarChart3,
   FileText,
   Crown,
   Zap
 } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Input } from '../ui/Input';
-import { PasswordStrength } from '../ui/PasswordStrength';
-import { useAuth } from '../../hooks/useAuth';
-import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
-import { validateEmail, validatePhone, validatePassword } from '../../utils/validation';
+import { Button } from '../components/webapp-ui/Button';
+import { Input } from '../components/webapp-ui/Input';
+import { PasswordStrength } from '../components/webapp-ui/PasswordStrength';
+import { useAuth } from '../hooks/useAuth';
+// import { formatDateDDMMYYYY } from '../utils/timezoneUtils';
+import { validateEmail, validatePhone, validatePassword } from '../utils/validation';
+import { purgeUserData } from '../utils/accountDeletion';
 
 interface ProfileForm {
   name: string;
@@ -55,8 +49,6 @@ interface NotificationSettings {
   smsNotifications: boolean;
   paymentReminders: boolean;
   leaseExpiry: boolean;
-  maintenanceAlerts: boolean;
-  marketingEmails: boolean;
   reminderTiming: 'immediate' | '1day' | '3days' | '1week';
   quietHours: boolean;
   quietStart: string;
@@ -71,14 +63,7 @@ interface SubscriptionPlan {
   current: boolean;
 }
 
-interface LoginActivity {
-  id: string;
-  device: string;
-  location: string;
-  timestamp: string;
-  ip: string;
-  status: 'success' | 'failed';
-}
+// Removed LoginActivity block and related mock data per request
 
 const mockPlans: SubscriptionPlan[] = [
   {
@@ -104,32 +89,7 @@ const mockPlans: SubscriptionPlan[] = [
   }
 ];
 
-const mockLoginActivity: LoginActivity[] = [
-  {
-    id: '1',
-    device: 'Chrome on Windows',
-    location: 'Mumbai, India',
-    timestamp: '2025-01-15 10:30 AM',
-    ip: '192.168.1.1',
-    status: 'success'
-  },
-  {
-    id: '2',
-    device: 'Safari on iPhone',
-    location: 'Mumbai, India',
-    timestamp: '2025-01-14 08:15 PM',
-    ip: '192.168.1.2',
-    status: 'success'
-  },
-  {
-    id: '3',
-    device: 'Chrome on Android',
-    location: 'Delhi, India',
-    timestamp: '2025-01-13 02:45 PM',
-    ip: '203.192.1.5',
-    status: 'failed'
-  }
-];
+// Login activity mock removed
 
 export const SettingsPage: React.FC = () => {
   const [activeSection, setActiveSection] = useState('profile');
@@ -150,8 +110,6 @@ export const SettingsPage: React.FC = () => {
     smsNotifications: true,
     paymentReminders: true,
     leaseExpiry: true,
-    maintenanceAlerts: true,
-    marketingEmails: false,
     reminderTiming: '3days',
     quietHours: true,
     quietStart: '22:00',
@@ -164,7 +122,7 @@ export const SettingsPage: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [testNotificationSent, setTestNotificationSent] = useState(false);
+  
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -178,8 +136,7 @@ export const SettingsPage: React.FC = () => {
     { id: 'profile', name: 'Profile Information', icon: User },
     { id: 'security', name: 'Password & Security', icon: Shield },
     { id: 'notifications', name: 'Notifications', icon: Bell },
-    { id: 'subscription', name: 'Subscription Plan', icon: CreditCard },
-    { id: 'privacy', name: 'Data & Privacy', icon: Database }
+    { id: 'subscription', name: 'Subscription Plan', icon: CreditCard }
   ];
 
   const validateProfile = (): boolean => {
@@ -285,46 +242,28 @@ export const SettingsPage: React.FC = () => {
     }));
   };
 
-  const handleNotificationChange = (field: keyof NotificationSettings, value: string) => {
-    setNotificationSettings(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  };
+  
 
-  const sendTestNotification = async () => {
-    setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setLoading(false);
-    setTestNotificationSent(true);
-    setTimeout(() => setTestNotificationSent(false), 3000);
-  };
-
-  const exportData = () => {
-    const data = {
-      profile: profileForm,
-      properties: 'Property data would be included here...',
-      payments: 'Payment history would be included here...',
-      documents: 'Document metadata would be included here...'
-    };
-    
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'propertypro-data-export.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  // Data export functionality removed with Data & Privacy section
+  // const exportData = () => { ... };
 
   const handleDeleteAccount = async () => {
-    setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setLoading(false);
-    setShowDeleteDialog(false);
+    if (!user?.id) return;
     
-    // In a real app, this would delete the account and redirect
-    alert('Account deletion request submitted. You will receive a confirmation email.');
+    setLoading(true);
+    try {
+      await purgeUserData(user.id);
+      
+      // Log out and redirect to login
+      await logout();
+      navigate('/auth/login');
+    } catch (error) {
+      console.error('Error deleting account:', error);
+      alert('Failed to delete account. Please contact support.');
+    } finally {
+      setLoading(false);
+      setShowDeleteDialog(false);
+    }
   };
 
   return (
@@ -487,6 +426,9 @@ export const SettingsPage: React.FC = () => {
                       error={errors.propertyCount}
                       icon={<Building2 size={18} />}
                       placeholder="5"
+                      numericType="integer"
+                      min={0}
+                      max={1000}
                     />
                   </div>
 
@@ -501,6 +443,42 @@ export const SettingsPage: React.FC = () => {
                     </Button>
                   </div>
                 </form>
+
+                {/* Delete Account Section */}
+                <div className="glass-card rounded-xl p-6 border-l-4 border-red-500 mt-6">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
+                      <Trash2 className="w-6 h-6 text-red-600" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-semibold text-glass">Delete Account</h2>
+                      <p className="text-glass-muted">Permanently delete your account and all data</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="glass rounded-lg p-4 bg-red-50 bg-opacity-10">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <h3 className="font-medium text-red-600 mb-1">Warning: This action cannot be undone</h3>
+                          <p className="text-sm text-glass-muted">
+                            Deleting your account will immediately and permanently remove all your properties, leases, 
+                            payments, documents, and personal data from all databases and storage. This action cannot be reversed.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <Button
+                      onClick={() => setShowDeleteDialog(true)}
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700 border-red-600 hover:border-red-700"
+                    >
+                      Delete My Account
+                    </Button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -596,45 +574,6 @@ export const SettingsPage: React.FC = () => {
                     </div>
                   </form>
                 </div>
-
-                {/* Login Activity */}
-                <div className="glass-card rounded-xl p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center glow">
-                      <Shield className="w-6 h-6 text-green-800" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-glass">Login Activity</h2>
-                      <p className="text-glass-muted">Recent login attempts and sessions</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    {mockLoginActivity.map((activity) => (
-                      <div key={activity.id} className="glass rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-3 h-3 rounded-full ${
-                              activity.status === 'success' ? 'bg-green-500' : 'bg-red-500'
-                            }`} />
-                            <div>
-                              <p className="font-medium text-glass">{activity.device}</p>
-                              <p className="text-sm text-glass-muted">{activity.location} • {activity.ip}</p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-sm text-glass">{activity.timestamp}</p>
-                            <p className={`text-xs font-medium ${
-                              activity.status === 'success' ? 'text-green-700' : 'text-red-600'
-                            }`}>
-                              {activity.status === 'success' ? 'Successful' : 'Failed'}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
               </div>
             )}
 
@@ -660,9 +599,7 @@ export const SettingsPage: React.FC = () => {
                         { key: 'emailNotifications', label: 'Email Notifications', description: 'Receive notifications via email', icon: Mail },
                         { key: 'smsNotifications', label: 'SMS Notifications', description: 'Receive notifications via SMS', icon: Smartphone },
                         { key: 'paymentReminders', label: 'Payment Reminders', description: 'Reminders for upcoming rent payments', icon: CreditCard },
-                        { key: 'leaseExpiry', label: 'Lease Expiry Alerts', description: 'Alerts when leases are about to expire', icon: Calendar },
-                        { key: 'maintenanceAlerts', label: 'Maintenance Alerts', description: 'Notifications for maintenance requests', icon: SettingsIcon },
-                        { key: 'marketingEmails', label: 'Marketing Emails', description: 'Product updates and promotional content', icon: Globe }
+                        { key: 'leaseExpiry', label: 'Lease Expiry Alerts', description: 'Alerts when leases are about to expire', icon: Calendar }
                       ].map((item) => (
                         <div key={item.key} className="flex items-center justify-between p-4 glass rounded-lg">
                           <div className="flex items-center gap-3">
@@ -686,95 +623,7 @@ export const SettingsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Timing Settings */}
-                  <div>
-                    <h3 className="text-lg font-medium text-glass mb-4">Timing Settings</h3>
-                    <div className="space-y-4">
-                      <div className="glass rounded-lg p-4">
-                        <label className="block text-sm font-medium text-glass mb-2">Reminder Timing</label>
-                        <select
-                          value={notificationSettings.reminderTiming}
-                          onChange={(e) => handleNotificationChange('reminderTiming', e.target.value)}
-                          className="w-full glass-input rounded-lg px-3 py-2 text-glass"
-                        >
-                          <option value="immediate">Immediate</option>
-                          <option value="1day">1 day before</option>
-                          <option value="3days">3 days before</option>
-                          <option value="1week">1 week before</option>
-                        </select>
-                      </div>
-
-                      <div className="glass rounded-lg p-4">
-                        <div className="flex items-center justify-between mb-4">
-                          <div>
-                            <p className="font-medium text-glass">Quiet Hours</p>
-                            <p className="text-sm text-glass-muted">Disable notifications during specific hours</p>
-                          </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={notificationSettings.quietHours}
-                              onChange={() => handleNotificationToggle('quietHours')}
-                              className="sr-only peer"
-                            />
-                            <div className="w-11 h-6 bg-white bg-opacity-20 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-800"></div>
-                          </label>
-                        </div>
-
-                        {notificationSettings.quietHours && (
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-sm font-medium text-glass mb-1">Start Time</label>
-                              <input
-                                type="time"
-                                value={notificationSettings.quietStart}
-                                onChange={(e) => handleNotificationChange('quietStart', e.target.value)}
-                                className="w-full glass-input rounded-lg px-3 py-2 text-glass"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-glass mb-1">End Time</label>
-                              <input
-                                type="time"
-                                value={notificationSettings.quietEnd}
-                                onChange={(e) => handleNotificationChange('quietEnd', e.target.value)}
-                                className="w-full glass-input rounded-lg px-3 py-2 text-glass"
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Test Notifications */}
-                  <div className="glass rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-glass">Test Notifications</p>
-                        <p className="text-sm text-glass-muted">Send a test notification to verify your settings</p>
-                      </div>
-                      <Button
-                        onClick={sendTestNotification}
-                        loading={loading}
-                        disabled={loading || testNotificationSent}
-                        variant="outline"
-                        className="flex items-center gap-2"
-                      >
-                        {testNotificationSent ? (
-                          <>
-                            <CheckCircle size={16} />
-                            Sent!
-                          </>
-                        ) : (
-                          <>
-                            <Zap size={16} />
-                            Send Test
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
+                  {/* Timing and Test sections removed per requirements */}
                 </div>
               </div>
             )}
@@ -883,17 +732,6 @@ export const SettingsPage: React.FC = () => {
                       </div>
                       <p className="text-xs text-orange-600 mt-1">Upgrade needed</p>
                     </div>
-
-                    <div className="glass rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-glass-muted">API Calls</span>
-                        <span className="text-glass font-medium">1,250 / ∞</span>
-                      </div>
-                      <div className="w-full bg-white bg-opacity-20 rounded-full h-2">
-                        <div className="bg-green-500 h-2 rounded-full" style={{ width: '25%' }} />
-                      </div>
-                      <p className="text-xs text-green-700 mt-1">Within limits</p>
-                    </div>
                   </div>
                 </div>
 
@@ -909,155 +747,20 @@ export const SettingsPage: React.FC = () => {
                         <p className="text-glass-muted">Download invoices and receipts</p>
                       </div>
                     </div>
-                    <Button variant="outline" className="flex items-center gap-2">
-                      <Download size={16} />
-                      Download All
-                    </Button>
-                  </div>
-
-                  <div className="space-y-3">
-                    {[
-                      { date: '2025-01-01', amount: 0, status: 'Paid', plan: 'Starter' },
-                      { date: '2024-12-01', amount: 0, status: 'Paid', plan: 'Starter' },
-                      { date: '2024-11-01', amount: 0, status: 'Paid', plan: 'Starter' }
-                    ].map((invoice, index) => (
-                      <div key={index} className="flex items-center justify-between p-4 glass rounded-lg">
-                        <div>
-                          <p className="font-medium text-glass">{invoice.plan} Plan</p>
-                          <p className="text-sm text-glass-muted">{formatDateDDMMYYYY(invoice.date)}</p>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <p className="font-medium text-glass">₹{invoice.amount}</p>
-                            <p className="text-sm text-green-700">{invoice.status}</p>
-                          </div>
-                          <Button variant="ghost" size="sm" className="p-2">
-                            <Download size={14} />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Data & Privacy */}
-            {activeSection === 'privacy' && (
-              <div className="space-y-6">
-                {/* Data Export */}
-                <div className="glass-card rounded-xl p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center glow">
-                      <Download className="w-6 h-6 text-green-800" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-glass">Export Your Data</h2>
-                      <p className="text-glass-muted">Download a copy of all your data</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <p className="text-glass-muted">
-                      You can request a copy of all your data including properties, payments, documents, and account information. 
-                      The export will be provided in JSON format.
-                    </p>
                     
-                    <div className="flex items-center gap-4">
-                      <Button onClick={exportData} className="flex items-center gap-2">
-                        <Download size={16} />
-                        Export Data
-                      </Button>
-                      <p className="text-sm text-glass-muted">
-                        Last export: Never
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* GDPR Information */}
-                <div className="glass-card rounded-xl p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center glow">
-                      <Shield className="w-6 h-6 text-green-800" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-glass">Privacy & GDPR</h2>
-                      <p className="text-glass-muted">Your privacy rights and data protection</p>
-                    </div>
                   </div>
 
-                  <div className="space-y-4">
-                    <div className="glass rounded-lg p-4">
-                      <h3 className="font-medium text-glass mb-2">Data We Collect</h3>
-                      <ul className="text-sm text-glass-muted space-y-1">
-                        <li>• Account information (name, email, phone)</li>
-                        <li>• Property details and financial data</li>
-                        <li>• Payment history and transaction records</li>
-                        <li>• Uploaded documents and files</li>
-                        <li>• Usage analytics and preferences</li>
-                      </ul>
-                    </div>
-
-                    <div className="glass rounded-lg p-4">
-                      <h3 className="font-medium text-glass mb-2">Your Rights</h3>
-                      <ul className="text-sm text-glass-muted space-y-1">
-                        <li>• Right to access your personal data</li>
-                        <li>• Right to rectify inaccurate data</li>
-                        <li>• Right to erase your data</li>
-                        <li>• Right to restrict processing</li>
-                        <li>• Right to data portability</li>
-                      </ul>
-                    </div>
-
-                    <div className="flex gap-4">
-                      <Button variant="outline">
-                        Privacy Policy
-                      </Button>
-                      <Button variant="outline">
-                        Terms of Service
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Delete Account */}
-                <div className="glass-card rounded-xl p-6 border-l-4 border-red-500">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
-                      <Trash2 className="w-6 h-6 text-red-600" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-glass">Delete Account</h2>
-                      <p className="text-glass-muted">Permanently delete your account and all data</p>
-                    </div>
+                  <div className="mb-4 p-3 rounded-lg bg-yellow-100 bg-opacity-20 border border-yellow-500 border-opacity-30">
+                    <p className="text-sm text-yellow-700">
+                      This is an MVP prototype and this section is not implemented yet
+                    </p>
                   </div>
 
-                  <div className="space-y-4">
-                    <div className="glass rounded-lg p-4 bg-red-50 bg-opacity-10">
-                      <div className="flex items-start gap-3">
-                        <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
-                        <div>
-                          <h3 className="font-medium text-red-600 mb-1">Warning: This action cannot be undone</h3>
-                          <p className="text-sm text-glass-muted">
-                            Deleting your account will permanently remove all your properties, payments, documents, 
-                            and personal data. This action cannot be reversed.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Button
-                      onClick={() => setShowDeleteDialog(true)}
-                      variant="outline"
-                      className="text-red-600 hover:text-red-700 border-red-600 hover:border-red-700"
-                    >
-                      Delete My Account
-                    </Button>
-                  </div>
+                  
                 </div>
               </div>
             )}
+
           </div>
         </div>
 
@@ -1077,8 +780,17 @@ export const SettingsPage: React.FC = () => {
               
               <div className="space-y-4">
                 <p className="text-glass-muted">
-                  Are you sure you want to delete your account? All your data including properties, 
-                  payments, and documents will be permanently removed.
+                  Are you sure you want to delete your account? This will immediately and permanently:
+                </p>
+                <ul className="text-sm text-glass-muted list-disc list-inside space-y-1 ml-2">
+                  <li>Delete all properties, leases, and tenant information</li>
+                  <li>Delete all payment records and financial data</li>
+                  <li>Delete all documents and images from storage</li>
+                  <li>Delete your account settings and preferences</li>
+                  <li>Remove all data from the database</li>
+                </ul>
+                <p className="text-red-600 font-medium text-sm">
+                  This action cannot be undone and your data cannot be recovered.
                 </p>
                 
                 <div className="flex gap-3">

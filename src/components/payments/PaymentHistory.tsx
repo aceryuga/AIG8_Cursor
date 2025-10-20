@@ -309,6 +309,17 @@ export const PaymentHistory: React.FC = () => {
     }
   };
 
+  const formatPaymentMethod = (method: string) => {
+    switch (method) {
+      case 'bank_transfer': return 'Bank Transfer';
+      case 'upi': return 'UPI';
+      case 'cash': return 'Cash';
+      case 'cheque': return 'Cheque';
+      case 'card': return 'Card';
+      default: return method;
+    }
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'completed': return <CheckCircle size={16} />;
@@ -328,7 +339,7 @@ export const PaymentHistory: React.FC = () => {
         `"${payment.tenant}"`,
         payment.amount,
         payment.paymentType || 'Rent',
-        payment.method,
+        formatPaymentMethod(payment.method),
         payment.reference,
         payment.status,
         `"${payment.notes || ''}"`
@@ -573,7 +584,7 @@ export const PaymentHistory: React.FC = () => {
                     <option value="all">All Methods</option>
                     <option value="cash">Cash</option>
                     <option value="upi">UPI</option>
-                    <option value="bank transfer">Bank Transfer</option>
+                    <option value="bank_transfer">Bank Transfer</option>
                     <option value="cheque">Cheque</option>
                     <option value="card">Card</option>
                   </select>
@@ -685,7 +696,7 @@ export const PaymentHistory: React.FC = () => {
                       </div>
                     </td>
                     <td className="p-4 text-sm text-glass">
-                      {payment.method}
+                      {formatPaymentMethod(payment.method)}
                     </td>
                     <td className="p-4 text-sm text-glass-muted">
                       {payment.reference}

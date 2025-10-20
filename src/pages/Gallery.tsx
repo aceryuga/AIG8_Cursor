@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   Building2, 
@@ -18,15 +18,20 @@ import {
   X,
   LogOut,
   HelpCircle,
-  User
+  User,
+  GripVertical,
+  Save
 } from 'lucide-react';
+import { DndContext, closestCenter, DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, useSortable, rectSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Button } from '../components/webapp-ui/Button';
 import { Input } from '../components/webapp-ui/Input';
 import { NotificationBell } from '../components/ui/NotificationBell';
 import { ImageWithFallback } from '../components/ui/ImageWithFallback';
 import { useAuth } from '../hooks/useAuth';
 import { supabase } from '../lib/supabase';
-import { formatFileSize, uploadPropertyImage, deletePropertyImage, setPrimaryImage, validateImageFile } from '../utils/propertyImages';
+import { formatFileSize, uploadPropertyImage, deletePropertyImage, setPrimaryImage, validateImageFile, bulkUpdateImageOrder } from '../utils/propertyImages';
 import { formatDateDDMMYYYY } from '../utils/timezoneUtils';
 
 interface PropertyAlbum {
@@ -48,6 +53,7 @@ interface PropertyImage {
   image_size?: number;
   image_type?: string;
   is_primary: boolean;
+  sort_order?: number;
   created_at: string;
 }
 
@@ -67,11 +73,21 @@ export const Gallery: React.FC = () => {
   const [properties, setProperties] = useState<{id: string, name: string}[]>([]);
   const [selectedImage, setSelectedImage] = useState<PropertyImage | null>(null);
   const [showImageViewer, setShowImageViewer] = useState(false);
+  const [isArrangeMode, setIsArrangeMode] = useState(false);
+  const [tempOrderImages, setTempOrderImages] = useState<PropertyImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { user, logout } = useAuth();
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    })
+  );
+
   // Fetch all property albums with images
-  const fetchAlbums = async () => {
+  const fetchAlbums = useCallback(async () => {
     if (!user?.id) return;
 
     try {
@@ -92,6 +108,7 @@ export const Gallery: React.FC = () => {
             image_size,
             image_type,
             is_primary,
+            sort_order,
             created_at
           )
         `)
@@ -108,8 +125,26 @@ export const Gallery: React.FC = () => {
         .filter(property => property.property_images && property.property_images.length > 0)
         .map(property => {
           const images = property.property_images as PropertyImage[];
-          const primaryImage = images.find(img => img.is_primary);
-          const latestImage = images.sort((a, b) => 
+          
+          // Sort images by sort_order (nulls last), then is_primary, then created_at
+          const sortedImages = [...images].sort((a, b) => {
+            // First, sort by sort_order (nulls go to end)
+            if (a.sort_order != null && b.sort_order != null) {
+              return a.sort_order - b.sort_order;
+            }
+            if (a.sort_order != null) return -1;
+            if (b.sort_order != null) return 1;
+            
+            // Then by is_primary
+            if (a.is_primary && !b.is_primary) return -1;
+            if (!a.is_primary && b.is_primary) return 1;
+            
+            // Finally by created_at (newest first)
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+          });
+          
+          const primaryImage = sortedImages.find(img => img.is_primary);
+          const latestImage = [...images].sort((a, b) => 
             new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
           )[0];
 
@@ -118,10 +153,10 @@ export const Gallery: React.FC = () => {
             property_name: property.name,
             property_address: property.address,
             property_type: property.property_type,
-            total_images: images.length,
-            primary_image_url: primaryImage?.image_url || images[0]?.image_url || '',
+            total_images: sortedImages.length,
+            primary_image_url: primaryImage?.image_url || sortedImages[0]?.image_url || '',
             latest_image_date: latestImage?.created_at || '',
-            images: images
+            images: sortedImages
           };
         });
 
@@ -131,14 +166,14 @@ export const Gallery: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user?.id]);
 
   useEffect(() => {
     fetchAlbums();
-  }, [user?.id]);
+  }, [fetchAlbums]);
 
   // Fetch properties for upload modal
-  const fetchProperties = async () => {
+  const fetchProperties = useCallback(async () => {
     if (!user?.id) return;
 
     try {
@@ -157,11 +192,11 @@ export const Gallery: React.FC = () => {
     } catch (error) {
       console.error('Error fetching properties:', error);
     }
-  };
+  }, [user?.id]);
 
   useEffect(() => {
     fetchProperties();
-  }, [user?.id]);
+  }, [fetchProperties]);
 
   // Handle file selection
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -258,6 +293,149 @@ export const Gallery: React.FC = () => {
     }
   };
 
+  // Toggle arrange mode
+  const handleArrangeModeToggle = () => {
+    if (!isArrangeMode && selectedAlbum) {
+      // Entering arrange mode - save current order
+      setTempOrderImages([...selectedAlbum.images]);
+      setIsArrangeMode(true);
+    } else {
+      // Exiting without saving - revert changes
+      setIsArrangeMode(false);
+      setTempOrderImages([]);
+    }
+  };
+
+  // Handle drag end for image reordering
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    const oldIndex = tempOrderImages.findIndex((img) => img.id === active.id);
+    const newIndex = tempOrderImages.findIndex((img) => img.id === over.id);
+
+    const items = Array.from(tempOrderImages);
+    const [reorderedItem] = items.splice(oldIndex, 1);
+    items.splice(newIndex, 0, reorderedItem);
+
+    setTempOrderImages(items);
+  };
+
+  // Sortable Image Card for Gallery
+  const SortableGalleryImage: React.FC<{ image: PropertyImage; index: number }> = ({ image, index }) => {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+    } = useSortable({ id: image.id });
+
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.5 : 1,
+    };
+
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        {...attributes}
+        {...listeners}
+        className={`glass rounded-lg overflow-hidden relative transition-all duration-200 ${
+          isDragging ? 'shadow-2xl scale-105 z-50' : ''
+        }`}
+      >
+        <div className="aspect-square relative">
+          <div className="absolute top-2 right-2 z-10 bg-black bg-opacity-50 rounded-full p-2 cursor-grab active:cursor-grabbing">
+            <GripVertical size={16} className="text-white" />
+          </div>
+          
+          <div className="absolute bottom-2 left-2 z-10 bg-green-600 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm">
+            {index + 1}
+          </div>
+          
+          <ImageWithFallback
+            src={image.image_url}
+            alt={image.image_name}
+            className="w-full h-full object-cover"
+            fallbackText="Image"
+          />
+          
+          {image.is_primary && (
+            <div className="absolute top-2 left-2">
+              <div className="bg-green-600 text-white px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+                <Star size={12} fill="currentColor" />
+                Primary
+              </div>
+            </div>
+          )}
+        </div>
+        
+        <div className="p-3">
+          <p className="text-sm font-medium text-glass truncate" title={image.image_name}>
+            {image.image_name}
+          </p>
+          <div className="flex items-center justify-between text-xs text-glass-muted">
+            <span>{image.image_size ? formatFileSize(image.image_size) : 'Unknown size'}</span>
+            <span>{formatDateDDMMYYYY(image.created_at)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Save new order
+  const handleSaveOrder = async () => {
+    if (!selectedAlbum) return;
+
+    try {
+      const propertyId = selectedAlbum.property_id;
+      
+      // Create updates with new sort_order values
+      const updates = tempOrderImages.map((image, index) => ({
+        id: image.id,
+        sort_order: index
+      }));
+
+      await bulkUpdateImageOrder(updates);
+      
+      // Exit arrange mode
+      setIsArrangeMode(false);
+      setTempOrderImages([]);
+      
+      // Refresh albums from database to confirm persistence
+      await fetchAlbums();
+      
+      // Find and re-select the album with updated order after state updates
+      setTimeout(() => {
+        setAlbums(currentAlbums => {
+          const refreshedAlbum = currentAlbums.find(a => a.property_id === propertyId);
+          if (refreshedAlbum) {
+            setSelectedAlbum(refreshedAlbum);
+          }
+          return currentAlbums;
+        });
+      }, 100);
+      
+      alert('Image order saved successfully!');
+    } catch (error) {
+      console.error('Error saving image order:', error);
+      alert('Failed to save image order. Please try again.');
+    }
+  };
+
+  // Cancel arranging
+  const handleCancelArrange = () => {
+    setIsArrangeMode(false);
+    setTempOrderImages([]);
+  };
+
   // Handle drag and drop
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -343,96 +521,145 @@ export const Gallery: React.FC = () => {
                   </p>
                 </div>
               </div>
-              <div className="text-right">
-                <p className="text-sm text-glass-muted">
-                  {selectedAlbum.total_images} image{selectedAlbum.total_images !== 1 ? 's' : ''}
-                </p>
-                <p className="text-xs text-glass-muted capitalize">
-                  {selectedAlbum.property_type}
-                </p>
+              <div className="flex items-center gap-4">
+                {isArrangeMode ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCancelArrange}
+                      className="flex items-center gap-2"
+                    >
+                      <X size={16} />
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleSaveOrder}
+                      className="flex items-center gap-2"
+                    >
+                      <Save size={16} />
+                      Save Order
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    {selectedAlbum.total_images > 1 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleArrangeModeToggle}
+                        className="flex items-center gap-2"
+                      >
+                        <GripVertical size={16} />
+                        Arrange
+                      </Button>
+                    )}
+                    <div className="text-right">
+                      <p className="text-sm text-glass-muted">
+                        {selectedAlbum.total_images} image{selectedAlbum.total_images !== 1 ? 's' : ''}
+                      </p>
+                      <p className="text-xs text-glass-muted capitalize">
+                        {selectedAlbum.property_type}
+                      </p>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           </div>
 
           {/* Images Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {selectedAlbum.images.map((image) => (
-              <div key={image.id} className="glass rounded-lg overflow-hidden group relative">
-                <div className="aspect-square relative">
-                  <div 
-                    className="w-full h-full cursor-pointer"
-                    onClick={() => {
-                      setSelectedImage(image);
-                      setShowImageViewer(true);
-                    }}
-                  >
-                    <ImageWithFallback
-                      src={image.image_url}
-                      alt={image.image_name}
-                      className="w-full h-full object-cover"
-                      fallbackText="Image"
-                    />
-                  </div>
-                  
-                  {/* Primary badge */}
-                  {image.is_primary && (
-                    <div className="absolute top-2 left-2">
-                      <div className="bg-green-600 text-white px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1">
-                        <Star size={12} fill="currentColor" />
-                        Primary
-                      </div>
+          {isArrangeMode ? (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={tempOrderImages.map(img => img.id)} strategy={rectSortingStrategy}>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {tempOrderImages.map((image, index) => (
+                    <SortableGalleryImage key={image.id} image={image} index={index} />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {selectedAlbum.images.map((image) => (
+                <div key={image.id} className="glass rounded-lg overflow-hidden group relative">
+                  <div className="aspect-square relative">
+                    <div 
+                      className="w-full h-full cursor-pointer"
+                      onClick={() => {
+                        setSelectedImage(image);
+                        setShowImageViewer(true);
+                      }}
+                    >
+                      <ImageWithFallback
+                        src={image.image_url}
+                        alt={image.image_name}
+                        className="w-full h-full object-cover"
+                        fallbackText="Image"
+                      />
                     </div>
-                  )}
+                    
+                    {/* Primary badge */}
+                    {image.is_primary && (
+                      <div className="absolute top-2 left-2">
+                        <div className="bg-green-600 text-white px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+                          <Star size={12} fill="currentColor" />
+                          Primary
+                        </div>
+                      </div>
+                    )}
 
-                  {/* Overlay actions */}
-                  <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-all duration-200 flex items-center justify-center opacity-0 group-hover:opacity-100">
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setSelectedImage(image);
-                          setShowImageViewer(true);
-                        }}
-                        className="bg-white bg-opacity-20 border-white text-white hover:bg-opacity-30"
-                      >
-                        <Eye size={14} />
-                      </Button>
-                      {!image.is_primary && (
+                    {/* Overlay actions */}
+                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-all duration-200 flex items-center justify-center opacity-0 group-hover:opacity-100">
+                      <div className="flex gap-2">
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => handleSetPrimary(image.id)}
+                          onClick={() => {
+                            setSelectedImage(image);
+                            setShowImageViewer(true);
+                          }}
                           className="bg-white bg-opacity-20 border-white text-white hover:bg-opacity-30"
                         >
-                          <Star size={14} />
+                          <Eye size={14} />
                         </Button>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleDeleteImage(image.id, image.image_url)}
-                        className="bg-red-600 bg-opacity-20 border-red-600 text-white hover:bg-opacity-30"
-                      >
-                        <Trash2 size={14} />
-                      </Button>
+                        {!image.is_primary && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSetPrimary(image.id)}
+                            className="bg-white bg-opacity-20 border-white text-white hover:bg-opacity-30"
+                          >
+                            <Star size={14} />
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleDeleteImage(image.id, image.image_url)}
+                          className="bg-red-600 bg-opacity-20 border-red-600 text-white hover:bg-opacity-30"
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Image info */}
+                  <div className="p-3">
+                    <p className="text-sm font-medium text-glass truncate" title={image.image_name}>
+                      {image.image_name}
+                    </p>
+                    <div className="flex items-center justify-between text-xs text-glass-muted">
+                      <span>{image.image_size ? formatFileSize(image.image_size) : 'Unknown size'}</span>
+                      <span>{formatDateDDMMYYYY(image.created_at)}</span>
                     </div>
                   </div>
                 </div>
-                
-                {/* Image info */}
-                <div className="p-3">
-                  <p className="text-sm font-medium text-glass truncate" title={image.image_name}>
-                    {image.image_name}
-                  </p>
-                  <div className="flex items-center justify-between text-xs text-glass-muted">
-                    <span>{image.image_size ? formatFileSize(image.image_size) : 'Unknown size'}</span>
-                    <span>{formatDateDDMMYYYY(image.created_at)}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );

@@ -905,7 +905,12 @@ export const Dashboard: React.FC = () => {
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-2xl font-bold text-glass">Properties</h2>
               <Link to="/properties/add">
-                <Button variant="outline" size="sm" className="flex items-center gap-2">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="flex items-center gap-2"
+                  style={{ backgroundColor: '#053725', color: 'white', borderColor: '#053725' }}
+                >
                   <Plus size={16} />
                   Add Property
                 </Button>
@@ -991,29 +996,29 @@ export const Dashboard: React.FC = () => {
             {/* Quick Actions */}
             <div className="glass-card rounded-xl p-6">
               <h3 className="text-lg font-semibold text-glass mb-4">Quick Actions</h3>
-              <div className="space-y-4">
-                <Link to="/payments/record">
+              <div>
+                <Link to="/payments/record" className="block mb-2">
                   <Button className="w-full justify-start h-10 gap-2" variant="outline">
                     <CreditCard size={16} className="shrink-0" />
                     Record Payment
                   </Button>
                 </Link>
                 
-                <Link to="/payments/reconciliation">
+                <Link to="/payments/reconciliation" className="block mb-2">
                   <Button className="w-full justify-start h-10 gap-2" variant="outline">
                     <Brain size={16} className="shrink-0" />
                     AI Reconciliation
                   </Button>
                 </Link>
                 
-                <Link to="/properties/add">
+                <Link to="/properties/add" className="block mb-2">
                   <Button className="w-full justify-start h-10 gap-2" variant="outline">
                     <Plus size={16} className="shrink-0" />
                     Add Property
                   </Button>
                 </Link>
                 
-                <Link to="/documents">
+                <Link to="/documents" className="block">
                   <Button 
                     className="w-full justify-start h-10 gap-2" 
                     variant="outline"

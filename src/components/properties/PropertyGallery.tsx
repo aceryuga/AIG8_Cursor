@@ -1,5 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Trash2, Eye, Star, X, Image as ImageIcon, Plus } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Upload, Trash2, Eye, Star, X, Image as ImageIcon, Plus, GripVertical, Save } from 'lucide-react';
+import { DndContext, closestCenter, DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, useSortable, rectSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Button } from '../webapp-ui/Button';
 import { ImageWithFallback } from '../ui/ImageWithFallback';
 import { 
@@ -9,15 +12,86 @@ import {
   setPrimaryImage, 
   formatFileSize, 
   validateImageFile,
+  bulkUpdateImageOrder,
   PropertyImage 
 } from '../../utils/propertyImages';
 
 
 interface PropertyGalleryProps {
   propertyId: string;
+  onPrimaryImageChange?: (imageUrl: string) => void;
 }
 
-export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) => {
+// Sortable Image Card Component
+const SortableImageCard: React.FC<{ image: PropertyImage; index: number }> = ({ image, index }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: image.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`glass rounded-lg overflow-hidden relative transition-all duration-200 ${
+        isDragging ? 'shadow-2xl scale-105 z-50' : ''
+      }`}
+    >
+      <div className="aspect-square relative">
+        {/* Drag handle indicator */}
+        <div className="absolute top-2 right-2 z-10 bg-black bg-opacity-50 rounded-full p-2 cursor-grab active:cursor-grabbing">
+          <GripVertical size={16} className="text-white" />
+        </div>
+        
+        {/* Position number */}
+        <div className="absolute bottom-2 left-2 z-10 bg-green-600 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm">
+          {index + 1}
+        </div>
+        
+        <ImageWithFallback
+          src={image.image_url}
+          alt={image.image_name}
+          className="w-full h-full object-cover"
+          fallbackText="Image"
+        />
+        
+        {/* Primary badge */}
+        {image.is_primary && (
+          <div className="absolute top-2 left-2">
+            <div className="bg-green-600 text-white px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+              <Star size={12} fill="currentColor" />
+              Primary
+            </div>
+          </div>
+        )}
+      </div>
+      
+      {/* Image info */}
+      <div className="p-3">
+        <p className="text-sm font-medium text-glass truncate" title={image.image_name}>
+          {image.image_name}
+        </p>
+        <p className="text-xs text-glass-muted">
+          {image.image_size ? formatFileSize(image.image_size) : 'Unknown size'}
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId, onPrimaryImageChange }) => {
   const [images, setImages] = useState<PropertyImage[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -26,10 +100,20 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<PropertyImage | null>(null);
   const [showImageViewer, setShowImageViewer] = useState(false);
+  const [isArrangeMode, setIsArrangeMode] = useState(false);
+  const [tempOrderImages, setTempOrderImages] = useState<PropertyImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    })
+  );
 
   // Fetch property images
-  const fetchImages = async () => {
+  const fetchImages = useCallback(async () => {
     try {
       setLoading(true);
       const data = await fetchPropertyImages(propertyId);
@@ -39,11 +123,11 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
     } finally {
       setLoading(false);
     }
-  };
+  }, [propertyId]);
 
   useEffect(() => {
     fetchImages();
-  }, [propertyId]);
+  }, [fetchImages]);
 
   // Handle file selection
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -72,6 +156,11 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
     setUploadProgress({});
 
     try {
+      // Get the max sort_order for existing images
+      const maxSortOrder = images.length > 0
+        ? Math.max(...images.map(img => img.sort_order ?? 0))
+        : -1;
+
       const uploadPromises = selectedFiles.map(async (file, index) => {
         const fileId = `${Date.now()}-${index}`;
         setUploadProgress(prev => ({ ...prev, [fileId]: 0 }));
@@ -82,7 +171,8 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
             propertyId,
             (progress) => {
               setUploadProgress(prev => ({ ...prev, [fileId]: progress }));
-            }
+            },
+            maxSortOrder + index + 1 // Assign sort_order after existing images
           );
 
           return uploadedImage;
@@ -96,6 +186,13 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
       
       // Refresh images list
       await fetchImages();
+      
+      // Check if there's a new primary image and notify parent
+      const updatedImages = await fetchPropertyImages(propertyId);
+      const primaryImage = updatedImages.find(img => img.is_primary);
+      if (primaryImage && onPrimaryImageChange) {
+        onPrimaryImageChange(primaryImage.image_url);
+      }
       
       // Reset form
       setSelectedFiles([]);
@@ -120,6 +217,14 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
     try {
       await deletePropertyImage(imageId, imageUrl);
       await fetchImages();
+      
+      // Check if there's still a primary image after deletion and notify parent
+      const updatedImages = await fetchPropertyImages(propertyId);
+      const primaryImage = updatedImages.find(img => img.is_primary);
+      if (onPrimaryImageChange) {
+        onPrimaryImageChange(primaryImage?.image_url || '');
+      }
+      
       alert('Image deleted successfully!');
     } catch (error) {
       console.error('Error deleting image:', error);
@@ -132,6 +237,14 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
     try {
       await setPrimaryImage(imageId);
       await fetchImages();
+      
+      // Find the newly set primary image and notify parent
+      const updatedImages = await fetchPropertyImages(propertyId);
+      const newPrimaryImage = updatedImages.find(img => img.is_primary);
+      if (newPrimaryImage && onPrimaryImageChange) {
+        onPrimaryImageChange(newPrimaryImage.image_url);
+      }
+      
       alert('Primary image updated successfully!');
     } catch (error) {
       console.error('Error setting primary image:', error);
@@ -140,7 +253,7 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
   };
 
 
-  // Handle drag and drop
+  // Handle drag and drop for file upload
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -162,6 +275,68 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
     setSelectedFiles(prev => [...prev, ...imageFiles]);
   };
 
+  // Toggle arrange mode
+  const handleArrangeModeToggle = () => {
+    if (!isArrangeMode) {
+      // Entering arrange mode - save current order
+      setTempOrderImages([...images]);
+      setIsArrangeMode(true);
+    } else {
+      // Exiting without saving - revert changes
+      setIsArrangeMode(false);
+      setTempOrderImages([]);
+    }
+  };
+
+  // Handle drag end for image reordering
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    const oldIndex = tempOrderImages.findIndex((img) => img.id === active.id);
+    const newIndex = tempOrderImages.findIndex((img) => img.id === over.id);
+
+    const items = Array.from(tempOrderImages);
+    const [reorderedItem] = items.splice(oldIndex, 1);
+    items.splice(newIndex, 0, reorderedItem);
+
+    setTempOrderImages(items);
+  };
+
+  // Save new order
+  const handleSaveOrder = async () => {
+    try {
+      // Create updates with new sort_order values
+      const updates = tempOrderImages.map((image, index) => ({
+        id: image.id,
+        sort_order: index
+      }));
+
+      await bulkUpdateImageOrder(updates);
+      
+      // Refetch images from database to confirm persistence
+      await fetchImages();
+      
+      // Exit arrange mode
+      setIsArrangeMode(false);
+      setTempOrderImages([]);
+      
+      alert('Image order saved successfully!');
+    } catch (error) {
+      console.error('Error saving image order:', error);
+      alert('Failed to save image order. Please try again.');
+    }
+  };
+
+  // Cancel arranging
+  const handleCancelArrange = () => {
+    setIsArrangeMode(false);
+    setTempOrderImages([]);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -181,13 +356,47 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
             {images.length} image{images.length !== 1 ? 's' : ''} uploaded
           </p>
         </div>
-        <Button
-          onClick={() => setShowUploadModal(true)}
-          className="flex items-center gap-2"
-        >
-          <Plus size={16} />
-          Add Images
-        </Button>
+        <div className="flex items-center gap-2">
+          {isArrangeMode ? (
+            <>
+              <Button
+                variant="outline"
+                onClick={handleCancelArrange}
+                className="flex items-center gap-2"
+              >
+                <X size={16} />
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveOrder}
+                className="flex items-center gap-2"
+              >
+                <Save size={16} />
+                Save Order
+              </Button>
+            </>
+          ) : (
+            <>
+              {images.length > 1 && (
+                <Button
+                  variant="outline"
+                  onClick={handleArrangeModeToggle}
+                  className="flex items-center gap-2"
+                >
+                  <GripVertical size={16} />
+                  Arrange
+                </Button>
+              )}
+              <Button
+                onClick={() => setShowUploadModal(true)}
+                className="flex items-center gap-2"
+              >
+                <Plus size={16} />
+                Add Images
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Images Grid */}
@@ -203,6 +412,16 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId }) 
             Upload Images
           </Button>
         </div>
+      ) : isArrangeMode ? (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={tempOrderImages.map(img => img.id)} strategy={rectSortingStrategy}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {tempOrderImages.map((image, index) => (
+                <SortableImageCard key={image.id} image={image} index={index} />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {images.map((image) => (
