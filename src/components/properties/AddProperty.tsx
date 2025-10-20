@@ -5,7 +5,6 @@ import {
   ArrowRight, 
   Building2, 
   LogOut, 
-  Bell, 
   HelpCircle, 
   User, 
   Upload, 
@@ -16,7 +15,9 @@ import {
   Phone, 
   Mail, 
   Calendar,
-  Check
+  Check,
+  AlertTriangle,
+  Star
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
@@ -24,22 +25,34 @@ import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { getCurrentUTC } from '../../utils/timezoneUtils';
-import { sanitizeText, validateFileType, validateFileSize, SECURITY_CONSTANTS } from '../../utils/security';
+import { sanitizeText } from '../../utils/security';
 import { updatePropertyCountInSettings } from '../../utils/settingsUtils';
 import { checkPropertyLimit } from '../../utils/usageLimits';
 import { UpgradePrompt } from '../ui/UpgradePrompt';
+import { 
+  calculateEndDate, 
+  validateLeaseDates, 
+  LeaseDuration, 
+  formatDuration,
+  calculateDurationMonths
+} from '../../utils/leaseDuration';
+import { 
+  uploadPropertyImage, 
+  validateImageFile, 
+  formatFileSize 
+} from '../../utils/propertyImages';
 
 interface PropertyForm {
   // Basic Details
   name: string;
   address: string;
-  propertyType: 'apartment' | 'villa' | 'office' | 'shop' | '';
+  propertyType: 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa' | '';
   bedrooms: number;
   bathrooms: number;
   area: number;
   description: string;
   amenities: string[];
-  images: File[];
+  images: Array<{ file: File; isPrimary: boolean }>;
   
   // Financial Details
   rent: number;
@@ -52,6 +65,7 @@ interface PropertyForm {
   tenantEmail: string;
   leaseStart: string;
   leaseEnd: string;
+  leaseDuration: LeaseDuration;
 }
 
 const initialForm: PropertyForm = {
@@ -71,27 +85,14 @@ const initialForm: PropertyForm = {
   tenantPhone: '',
   tenantEmail: '',
   leaseStart: '',
-  leaseEnd: ''
+  leaseEnd: '',
+  leaseDuration: { value: 1, unit: 'years' }
 };
 
 const availableAmenities = [
   'Parking', 'Security', 'Gym', 'Swimming Pool', 'Garden', 'Power Backup',
   'Elevator', 'Balcony', 'Air Conditioning', 'Furnished', 'Internet', 'Clubhouse'
 ];
-
-// Helper to upload images to Supabase Storage and return public URLs
-async function uploadPropertyImages(files: File[], propertyId: string) {
-  const urls: string[] = [];
-  for (const file of files) {
-    const fileExt = file.name.split('.').pop();
-    const filePath = `${propertyId}/${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
-    const { error: uploadError } = await supabase.storage.from('property-images').upload(filePath, file);
-    if (uploadError) throw uploadError;
-    const { data } = supabase.storage.from('property-images').getPublicUrl(filePath);
-    urls.push(data.publicUrl);
-  }
-  return urls;
-}
 
 export const AddProperty: React.FC = () => {
   const [currentStep, setCurrentStep] = useState(1);
@@ -126,14 +127,20 @@ export const AddProperty: React.FC = () => {
       if (!form.name.trim()) newErrors.name = 'Property name is required';
       if (!form.address.trim()) newErrors.address = 'Address is required';
       if (!form.propertyType) newErrors.propertyType = 'Property type is required';
-      if (form.area <= 0) newErrors.area = 'Area must be greater than 0';
+      if (!form.area || form.area <= 0) newErrors.area = 'Area must be greater than 0';
+      if (form.area > 100000) newErrors.area = 'Area cannot exceed 100,000 sq ft';
       if (!form.description.trim()) newErrors.description = 'Description is required';
+      if (form.bedrooms < 0 || form.bedrooms > 50) newErrors.bedrooms = 'Bedrooms must be between 0 and 50';
+      if (form.bathrooms < 0 || form.bathrooms > 50) newErrors.bathrooms = 'Bathrooms must be between 0 and 50';
     }
 
     if (step === 2) {
-      if (form.rent <= 0) newErrors.rent = 'Rent must be greater than 0';
+      if (!form.rent || form.rent <= 0) newErrors.rent = 'Rent must be greater than 0';
+      if (form.rent > 10000000) newErrors.rent = 'Rent cannot exceed ₹10,000,000';
       if (form.securityDeposit < 0) newErrors.securityDeposit = 'Security deposit cannot be negative';
+      if (form.securityDeposit > 100000000) newErrors.securityDeposit = 'Security deposit cannot exceed ₹100,000,000';
       if (form.maintenanceCharges < 0) newErrors.maintenanceCharges = 'Maintenance charges cannot be negative';
+      if (form.maintenanceCharges > 100000000) newErrors.maintenanceCharges = 'Maintenance charges cannot exceed ₹100,000,000';
     }
 
     if (step === 3 && form.tenantName.trim()) {
@@ -141,6 +148,12 @@ export const AddProperty: React.FC = () => {
       if (!form.tenantEmail.trim()) newErrors.tenantEmail = 'Tenant email is required when tenant name is provided';
       if (!form.leaseStart) newErrors.leaseStart = 'Lease start date is required when tenant name is provided';
       if (!form.leaseEnd) newErrors.leaseEnd = 'Lease end date is required when tenant name is provided';
+      
+      // Validate lease dates
+      const dateValidationError = validateLeaseDates(form.leaseStart, form.leaseEnd);
+      if (dateValidationError) {
+        newErrors.leaseEnd = dateValidationError;
+      }
     }
 
     setErrors(newErrors);
@@ -205,19 +218,6 @@ export const AddProperty: React.FC = () => {
 
       // 1. Generate a UUID for the property (client-side, to use for image path)
       const propertyId = crypto.randomUUID();
-      let imageUrls: string[] = [];
-      if (form.images.length > 0) {
-        try {
-          console.log('Uploading property images...');
-          imageUrls = await uploadPropertyImages(form.images, propertyId);
-          console.log('Image upload success:', imageUrls);
-        } catch (imgErr: any) {
-          console.error('Image upload failed:', imgErr);
-          setErrors({ submit: 'Image upload failed: ' + (imgErr.message || imgErr.error_description || 'Unknown error') });
-          setLoading(false);
-          return;
-        }
-      }
 
       // 2. Insert property (without rent - rent goes in leases table)
       console.log('Inserting property...');
@@ -234,7 +234,6 @@ export const AddProperty: React.FC = () => {
           area: form.area,
           description: form.description,
           amenities: form.amenities.join(','),
-          images: JSON.stringify(imageUrls),
           status: form.tenantName.trim() ? 'occupied' : 'vacant',
           created_at: currentTime, // Local timezone timestamp
           updated_at: currentTime  // Local timezone timestamp
@@ -256,7 +255,65 @@ export const AddProperty: React.FC = () => {
         await updatePropertyCountInSettings(user.id);
       }
 
-      // 3. Optionally insert tenant and lease
+      // 3. Upload images to property_images table
+      if (form.images.length > 0) {
+        try {
+          console.log('Uploading property images to property_images table...');
+          
+          // Find which file should be primary before uploading
+          const primaryFile = form.images.find(img => img.isPrimary);
+          const primaryFileName = primaryFile?.file.name;
+          
+          console.log(`Primary image selected: ${primaryFileName}`);
+          
+          // Upload all images in parallel (faster performance)
+          const uploadPromises = form.images.map(async (imageItem, index) => {
+            try {
+              await uploadPropertyImage(imageItem.file, propertyId, undefined, index);
+            } catch (error) {
+              console.error(`Error uploading image ${imageItem.file.name}:`, error);
+              throw error;
+            }
+          });
+
+          await Promise.all(uploadPromises);
+          console.log('All images uploaded successfully');
+          
+          // After all uploads complete, set the correct primary image
+          // Match by image_name (which stores the original file.name)
+          if (primaryFileName) {
+            console.log(`Setting primary image: ${primaryFileName}`);
+            
+            // First, unset all primary flags for this property
+            await supabase
+              .from('property_images')
+              .update({ is_primary: false })
+              .eq('property_id', propertyId);
+            
+            // Then set the selected image as primary by matching the file name
+            const { error: setPrimaryError } = await supabase
+              .from('property_images')
+              .update({ is_primary: true })
+              .eq('property_id', propertyId)
+              .eq('image_name', primaryFileName);
+            
+            if (setPrimaryError) {
+              console.error('Error setting primary image:', setPrimaryError);
+            } else {
+              console.log(`Primary image set successfully: ${primaryFileName}`);
+            }
+          }
+          
+          console.log('Image upload and primary selection complete');
+        } catch (imgErr: any) {
+          console.error('Image upload failed:', imgErr);
+          setErrors({ submit: 'Property created but image upload failed: ' + (imgErr.message || 'Unknown error') });
+          setLoading(false);
+          return;
+        }
+      }
+
+      // 4. Optionally insert tenant and lease
       if (form.tenantName.trim()) {
         const tenantId = crypto.randomUUID();
         console.log('Inserting tenant...');
@@ -322,13 +379,76 @@ export const AddProperty: React.FC = () => {
   const handleChange = (field: keyof PropertyForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     let value = e.target.value;
     
-    // Don't sanitize during typing - only sanitize on form submission
-    // This allows users to type freely without interruption
-    
+    // For numeric fields, use the enhanced validation from the Input component
+    // The Input component now handles sanitization and validation internally
     const finalValue = e.target.type === 'number' ? parseFloat(value) || 0 : value;
     setForm(prev => ({ ...prev, [field]: finalValue }));
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));
+    }
+  };
+
+  // Handle lease start date change and auto-calculate end date
+  const handleLeaseStartChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const startDate = e.target.value;
+    setForm(prev => {
+      const newForm = { ...prev, leaseStart: startDate };
+      
+      // Auto-calculate end date if duration is not custom
+      if (startDate && prev.leaseDuration.unit !== 'custom') {
+        newForm.leaseEnd = calculateEndDate(startDate, prev.leaseDuration);
+      }
+      
+      return newForm;
+    });
+    
+    // Clear any existing errors
+    if (errors.leaseStart) {
+      setErrors(prev => ({ ...prev, leaseStart: '', leaseEnd: '' }));
+    }
+  };
+
+  // Handle lease duration change and auto-calculate end date
+  const handleLeaseDurationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const [value, unit] = e.target.value.split('-');
+    const duration: LeaseDuration = {
+      value: parseInt(value),
+      unit: unit as 'months' | 'years' | 'custom'
+    };
+    
+    setForm(prev => {
+      const newForm = { ...prev, leaseDuration: duration };
+      
+      // Auto-calculate end date if duration is not custom and start date is set
+      if (prev.leaseStart && duration.unit !== 'custom') {
+        newForm.leaseEnd = calculateEndDate(prev.leaseStart, duration);
+      }
+      
+      return newForm;
+    });
+    
+    // Clear any existing errors
+    if (errors.leaseEnd) {
+      setErrors(prev => ({ ...prev, leaseEnd: '' }));
+    }
+  };
+
+  // Handle manual lease end date change - set duration to custom
+  const handleLeaseEndChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const endDate = e.target.value;
+    setForm(prev => {
+      const newForm = { ...prev, leaseEnd: endDate };
+      
+      // When user manually changes end date, always set to custom
+      // Use value: 0 to match the dropdown option "0-custom"
+      newForm.leaseDuration = { value: 0, unit: 'custom' };
+      
+      return newForm;
+    });
+    
+    // Clear any existing errors
+    if (errors.leaseEnd) {
+      setErrors(prev => ({ ...prev, leaseEnd: '' }));
     }
   };
 
@@ -347,43 +467,102 @@ export const AddProperty: React.FC = () => {
     fileInputRef.current?.click();
   };
 
+  // Handle file selection from input
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const validFiles: File[] = [];
-    const errors: string[] = [];
+    const validFiles: Array<{ file: File; isPrimary: boolean }> = [];
+    const errorMessages: string[] = [];
     
     files.forEach(file => {
-      // Validate file type
-      if (!validateFileType(file.name, [...SECURITY_CONSTANTS.ALLOWED_IMAGE_TYPES])) {
-        errors.push(`File "${file.name}" is not a supported image type.`);
+      const validation = validateImageFile(file);
+      if (!validation.valid) {
+        errorMessages.push(`${file.name}: ${validation.error}`);
         return;
       }
       
-      // Validate file size
-      if (!validateFileSize(file.size, SECURITY_CONSTANTS.MAX_FILE_SIZE)) {
-        errors.push(`File "${file.name}" is too large. Maximum size is 10MB.`);
-        return;
-      }
-      
-      validFiles.push(file);
+      validFiles.push({ file, isPrimary: false });
     });
     
-    if (errors.length > 0) {
-      alert(errors.join('\n'));
+    if (errorMessages.length > 0) {
+      alert(errorMessages.join('\n'));
     }
     
     if (validFiles.length > 0) {
-      setForm(prev => ({ ...prev, images: [...prev.images, ...validFiles] }));
+      setForm(prev => {
+        const newImages = [...prev.images, ...validFiles];
+        // If this is the first image, set it as primary
+        if (prev.images.length === 0 && newImages.length > 0) {
+          newImages[0].isPrimary = true;
+        }
+        return { ...prev, images: newImages };
+      });
     }
     
     // Clear the input
     e.target.value = '';
   };
 
+  // Handle drag and drop
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const files = Array.from(e.dataTransfer.files);
+    const validFiles: Array<{ file: File; isPrimary: boolean }> = [];
+    const errorMessages: string[] = [];
+    
+    files.forEach(file => {
+      const validation = validateImageFile(file);
+      if (!validation.valid) {
+        errorMessages.push(`${file.name}: ${validation.error}`);
+        return;
+      }
+      
+      validFiles.push({ file, isPrimary: false });
+    });
+    
+    if (errorMessages.length > 0) {
+      alert(errorMessages.join('\n'));
+    }
+    
+    if (validFiles.length > 0) {
+      setForm(prev => {
+        const newImages = [...prev.images, ...validFiles];
+        // If this is the first image, set it as primary
+        if (prev.images.length === 0 && newImages.length > 0) {
+          newImages[0].isPrimary = true;
+        }
+        return { ...prev, images: newImages };
+      });
+    }
+  };
+
+  // Remove image from selection
   const removeImage = (index: number) => {
+    setForm(prev => {
+      const newImages = prev.images.filter((_, i) => i !== index);
+      // If we removed the primary image and there are still images left,
+      // make the first one primary
+      if (prev.images[index].isPrimary && newImages.length > 0) {
+        newImages[0].isPrimary = true;
+      }
+      return { ...prev, images: newImages };
+    });
+  };
+
+  // Set an image as primary
+  const handleSetPrimaryImage = (index: number) => {
     setForm(prev => ({
       ...prev,
-      images: prev.images.filter((_, i) => i !== index)
+      images: prev.images.map((img, i) => ({
+        ...img,
+        isPrimary: i === index
+      }))
     }));
   };
 
@@ -534,9 +713,16 @@ export const AddProperty: React.FC = () => {
                   >
                     <option value="">Select property type</option>
                     <option value="apartment">Apartment</option>
-                    <option value="villa">Villa</option>
+                    <option value="co-working-space">Co-working Space</option>
+                    <option value="duplex">Duplex</option>
+                    <option value="independent-house">Independent House</option>
                     <option value="office">Office</option>
+                    <option value="penthouse">Penthouse</option>
+                    <option value="retail-space">Retail Space</option>
+                    <option value="serviced-apartment">Serviced Apartment</option>
                     <option value="shop">Shop</option>
+                    <option value="studio-apartment">Studio Apartment</option>
+                    <option value="villa">Villa</option>
                   </select>
                   {errors.propertyType && (
                     <p className="text-sm text-red-600">{errors.propertyType}</p>
@@ -562,6 +748,10 @@ export const AddProperty: React.FC = () => {
                   onChange={handleChange('area')}
                   error={errors.area}
                   placeholder="1200"
+                  numericType="integer"
+                  min={1}
+                  max={100000}
+                  required
                 />
 
                 <Input
@@ -570,6 +760,9 @@ export const AddProperty: React.FC = () => {
                   value={form.bedrooms}
                   onChange={handleChange('bedrooms')}
                   placeholder="2"
+                  numericType="integer"
+                  min={0}
+                  max={50}
                 />
 
                 <Input
@@ -578,6 +771,9 @@ export const AddProperty: React.FC = () => {
                   value={form.bathrooms}
                   onChange={handleChange('bathrooms')}
                   placeholder="2"
+                  numericType="integer"
+                  min={0}
+                  max={50}
                 />
               </div>
 
@@ -616,9 +812,18 @@ export const AddProperty: React.FC = () => {
 
               <div className="space-y-3">
                 <label className="block text-sm font-medium text-glass">Property Images</label>
-                <div className="border-2 border-dashed border-white border-opacity-30 rounded-lg p-6 text-center">
-                  <Upload size={24} className="mx-auto text-glass-muted mb-2" />
-                  <p className="text-glass-muted mb-2">Click to upload or drag and drop</p>
+                <div 
+                  className="border-2 border-dashed border-white border-opacity-30 rounded-lg p-6 text-center hover:border-green-800 transition-colors cursor-pointer"
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={handleDrop}
+                  onClick={handleChooseFilesClick}
+                >
+                  <Upload size={32} className="mx-auto text-glass-muted mb-4" />
+                  <p className="text-glass-muted mb-4">
+                    Drag and drop images here, or click to browse
+                  </p>
                   <input
                     type="file"
                     multiple
@@ -627,28 +832,90 @@ export const AddProperty: React.FC = () => {
                     ref={fileInputRef}
                     style={{ display: 'none' }}
                   />
-                  <Button variant="outline" className="cursor-pointer" onClick={handleChooseFilesClick}>
-                    Choose Files
+                  <Button 
+                    variant="outline" 
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleChooseFilesClick();
+                    }}
+                  >
+                    Choose Images
                   </Button>
+                  <p className="text-xs text-glass-muted mt-2">
+                    Supported formats: JPEG, PNG, WebP, GIF (Max 10MB each)
+                  </p>
                 </div>
                 
                 {form.images.length > 0 && (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {form.images.map((image, index) => (
-                      <div key={index} className="relative">
-                        <img
-                          src={URL.createObjectURL(image)}
-                          alt={`Property ${index + 1}`}
-                          className="w-full h-24 object-cover rounded-lg"
-                        />
-                        <button
-                          onClick={() => removeImage(index)}
-                          className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center"
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
-                    ))}
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-glass">Selected Images ({form.images.length})</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {form.images.map((imageItem, index) => (
+                        <div key={index} className="relative group">
+                          <div className="aspect-square relative rounded-lg overflow-hidden">
+                            <img
+                              src={URL.createObjectURL(imageItem.file)}
+                              alt={`Property ${index + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                            
+                            {/* Primary badge */}
+                            {imageItem.isPrimary && (
+                              <div className="absolute top-2 left-2">
+                                <div className="bg-green-600 text-white px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1">
+                                  <Star size={12} fill="currentColor" />
+                                  Primary
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Action buttons overlay */}
+                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 transition-all duration-200 flex items-center justify-center opacity-0 group-hover:opacity-100">
+                              <div className="flex gap-2">
+                                {!imageItem.isPrimary && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      handleSetPrimaryImage(index);
+                                    }}
+                                    className="p-2 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-full transition-colors"
+                                    title="Set as primary"
+                                  >
+                                    <Star size={16} className="text-white" />
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    removeImage(index);
+                                  }}
+                                  className="p-2 bg-red-600 bg-opacity-80 hover:bg-opacity-100 rounded-full transition-colors"
+                                  title="Remove image"
+                                >
+                                  <X size={16} className="text-white" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Image info */}
+                          <div className="mt-2">
+                            <p className="text-xs text-glass truncate" title={imageItem.file.name}>
+                              {imageItem.file.name}
+                            </p>
+                            <p className="text-xs text-glass-muted">
+                              {formatFileSize(imageItem.file.size)}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -669,6 +936,10 @@ export const AddProperty: React.FC = () => {
                   error={errors.rent}
                   icon={<IndianRupee size={18} />}
                   placeholder="15000"
+                  numericType="monetary"
+                  min={0}
+                  max={10000000}
+                  required
                 />
 
                 <Input
@@ -679,6 +950,9 @@ export const AddProperty: React.FC = () => {
                   error={errors.securityDeposit}
                   icon={<IndianRupee size={18} />}
                   placeholder="30000"
+                  numericType="monetary"
+                  min={0}
+                  max={100000000}
                 />
               </div>
 
@@ -690,6 +964,9 @@ export const AddProperty: React.FC = () => {
                 error={errors.maintenanceCharges}
                 icon={<IndianRupee size={18} />}
                 placeholder="2000"
+                numericType="monetary"
+                min={0}
+                max={100000000}
               />
 
               <div className="glass rounded-lg p-4">
@@ -760,24 +1037,85 @@ export const AddProperty: React.FC = () => {
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <Input
-                      label="Lease Start Date"
-                      type="date"
-                      value={form.leaseStart}
-                      onChange={handleChange('leaseStart')}
-                      error={errors.leaseStart}
-                      icon={<Calendar size={18} />}
-                    />
+                  <div className="space-y-6">
+                    <h3 className="text-lg font-semibold text-glass">Lease Details</h3>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <Input
+                        label="Lease Start Date"
+                        type="date"
+                        value={form.leaseStart}
+                        onChange={handleLeaseStartChange}
+                        error={errors.leaseStart}
+                        icon={<Calendar size={18} />}
+                      />
 
-                    <Input
-                      label="Lease End Date"
-                      type="date"
-                      value={form.leaseEnd}
-                      onChange={handleChange('leaseEnd')}
-                      error={errors.leaseEnd}
-                      icon={<Calendar size={18} />}
-                    />
+                      <div className="space-y-2">
+                        <label className="block text-sm font-medium text-glass">Lease Duration</label>
+                        <select
+                          value={`${form.leaseDuration.value}-${form.leaseDuration.unit}`}
+                          onChange={handleLeaseDurationChange}
+                          className="w-full h-11 px-3 rounded-lg glass-input text-glass transition-all duration-200"
+                        >
+                          <option value="6-months">6 Months</option>
+                          <option value="11-months">11 Months</option>
+                          <option value="1-years">1 Year</option>
+                          <option value="2-years">2 Years</option>
+                          <option value="3-years">3 Years</option>
+                          <option value="5-years">5 Years</option>
+                          <option value="0-custom">Custom</option>
+                        </select>
+                        <p className="text-xs text-glass-muted">
+                          {form.leaseDuration.unit === 'custom' 
+                            ? 'Manually adjust end date below' 
+                            : 'End date will be calculated automatically'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <Input
+                        label="Lease End Date"
+                        type="date"
+                        value={form.leaseEnd}
+                        onChange={handleLeaseEndChange}
+                        error={errors.leaseEnd}
+                        icon={<Calendar size={18} />}
+                      />
+
+                      {form.leaseStart && form.leaseEnd && (
+                        <div className="flex items-end">
+                          <div className="glass rounded-lg p-3 w-full">
+                            <p className="text-sm text-glass-muted mb-1">Calculated Duration</p>
+                            <p className="text-lg font-semibold text-glass">
+                              {form.leaseDuration.unit === 'custom' 
+                                ? (() => {
+                                    const months = calculateDurationMonths(form.leaseStart, form.leaseEnd);
+                                    return `Custom (${months} ${months === 1 ? 'month' : 'months'})`;
+                                  })()
+                                : formatDuration(form.leaseDuration)
+                              }
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {errors.leaseEnd && (
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                        <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                        <p className="text-sm text-red-600">{errors.leaseEnd}</p>
+                      </div>
+                    )}
+
+                    {form.leaseStart && form.leaseEnd && !errors.leaseEnd && (
+                      <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-2">
+                        <Check className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                        <p className="text-sm text-green-600">
+                          Lease period: {new Date(form.leaseStart).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} to {new Date(form.leaseEnd).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </>
               )}

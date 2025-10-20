@@ -4,7 +4,6 @@ import {
   ArrowLeft, 
   Building2, 
   LogOut, 
-  Bell, 
   HelpCircle, 
   User, 
   CreditCard, 
@@ -200,28 +199,7 @@ export const RecordPayment: React.FC = () => {
     return false;
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    // Sanitize form data before validation and submission
-    const sanitizedForm = {
-      ...form,
-      reference: sanitizeText(form.reference),
-      notes: sanitizeText(form.notes),
-      paymentTypeDetails: sanitizeText(form.paymentTypeDetails),
-      amount: form.amount // Numbers don't need sanitization
-    };
-    
-    // Update form with sanitized data
-    setForm(sanitizedForm);
-    
-    if (!validate()) return;
-
-    const hasDuplicates = await checkForDuplicates();
-    if (hasDuplicates && !showDuplicateWarning) {
-      return;
-    }
-
+  const submitPayment = async () => {
     setLoading(true);
     
     try {
@@ -260,6 +238,37 @@ export const RecordPayment: React.FC = () => {
       alert('Failed to record payment: ' + err.message);
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Sanitize form data before validation and submission
+    const sanitizedForm = {
+      ...form,
+      reference: sanitizeText(form.reference),
+      notes: sanitizeText(form.notes),
+      paymentTypeDetails: sanitizeText(form.paymentTypeDetails),
+      amount: form.amount // Numbers don't need sanitization
+    };
+    
+    // Update form with sanitized data
+    setForm(sanitizedForm);
+    
+    if (!validate()) return;
+
+    const hasDuplicates = await checkForDuplicates();
+    if (hasDuplicates && !showDuplicateWarning) {
+      return;
+    }
+
+    // Submit the payment
+    await submitPayment();
+  };
+
+  const handleContinueAnyway = async () => {
+    setShowDuplicateWarning(false);
+    await submitPayment();
   };
 
   const handleChange = (field: keyof PaymentForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -407,8 +416,13 @@ export const RecordPayment: React.FC = () => {
                   Please verify before proceeding.
                 </p>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => setShowDuplicateWarning(false)}>
-                    Continue Anyway
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    onClick={handleContinueAnyway}
+                    disabled={loading}
+                  >
+                    {loading ? 'Processing...' : 'Continue Anyway'}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => navigate('/payments')}>
                     Check Payment History
@@ -477,6 +491,10 @@ export const RecordPayment: React.FC = () => {
                 error={errors.amount}
                 icon={<IndianRupee size={18} />}
                 placeholder="15000"
+                numericType="monetary"
+                min={0}
+                max={100000000}
+                required
               />
 
               {/* Date */}

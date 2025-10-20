@@ -8,6 +8,7 @@ export interface PropertyImage {
   image_size?: number;
   image_type?: string;
   is_primary: boolean;
+  sort_order?: number;
   created_at: string;
 }
 
@@ -20,6 +21,7 @@ export const fetchPropertyImages = async (propertyId: string): Promise<PropertyI
       .from('property_images')
       .select('*')
       .eq('property_id', propertyId)
+      .order('sort_order', { ascending: true, nullsFirst: false })
       .order('is_primary', { ascending: false })
       .order('created_at', { ascending: false });
 
@@ -40,7 +42,8 @@ export const fetchPropertyImages = async (propertyId: string): Promise<PropertyI
 export const uploadPropertyImage = async (
   file: File,
   propertyId: string,
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number) => void,
+  sortOrder?: number
 ): Promise<PropertyImage> => {
   try {
     // Generate unique filename
@@ -86,7 +89,8 @@ export const uploadPropertyImage = async (
         image_name: file.name,
         image_size: file.size,
         image_type: file.type,
-        is_primary: isFirstImage
+        is_primary: isFirstImage,
+        sort_order: sortOrder
       })
       .select()
       .single();
@@ -212,4 +216,56 @@ export const validateImageFile = (file: File): { valid: boolean; error?: string 
   }
 
   return { valid: true };
+};
+
+/**
+ * Update the sort order of a single image
+ */
+export const updateImageOrder = async (imageId: string, sortOrder: number): Promise<void> => {
+  try {
+    const { error } = await supabase
+      .from('property_images')
+      .update({ sort_order: sortOrder })
+      .eq('id', imageId);
+
+    if (error) {
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error updating image order:', error);
+    throw error;
+  }
+};
+
+/**
+ * Bulk update sort orders for multiple images
+ */
+export const bulkUpdateImageOrder = async (
+  updates: Array<{ id: string; sort_order: number }>
+): Promise<void> => {
+  try {
+    console.log('Bulk updating image order:', updates);
+    
+    // Use Promise.all for parallel updates
+    const updatePromises = updates.map((update) =>
+      supabase
+        .from('property_images')
+        .update({ sort_order: update.sort_order })
+        .eq('id', update.id)
+    );
+
+    const results = await Promise.all(updatePromises);
+    
+    // Check for any errors
+    const errors = results.filter((result) => result.error);
+    if (errors.length > 0) {
+      console.error('Update errors:', errors);
+      throw new Error(`Failed to update ${errors.length} image(s): ${JSON.stringify(errors)}`);
+    }
+    
+    console.log('Successfully updated all image orders');
+  } catch (error) {
+    console.error('Error bulk updating image order:', error);
+    throw error;
+  }
 };

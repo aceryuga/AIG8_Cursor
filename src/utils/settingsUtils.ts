@@ -9,8 +9,6 @@ export interface UserSettings {
   sms_notifications: boolean;
   payment_reminders: boolean;
   lease_expiry_alerts: boolean;
-  maintenance_alerts: boolean;
-  marketing_emails: boolean;
   reminder_timing: 'immediate' | '1day' | '3days' | '1week';
   quiet_hours_enabled: boolean;
   quiet_hours_start: string;
@@ -415,8 +413,6 @@ export const updatePropertyCountInSettings = async (userId: string): Promise<boo
         sms_notifications: true,
         payment_reminders: true,
         lease_expiry_alerts: true,
-        maintenance_alerts: true,
-        marketing_emails: false,
         reminder_timing: '3days',
         quiet_hours_enabled: true,
         quiet_hours_start: '22:00',

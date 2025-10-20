@@ -139,12 +139,14 @@ const LandingPage = () => {
           <div id="pricing" className="-mt-8 md:-mt-12">
             <Pricing
             title="Simple pricing that scales with your portfolio"
-            description={<>Full features on every plan. Choose capacity based on the number of active properties. <strong>14-day free trial</strong>. No setup fees. Prices exclude GST</>}
+            description="Full features on every plan. Choose capacity based on the number of active properties. 14-day free trial. No setup fees. Prices exclude GST"
             plans={[
               {
                 name: "Starter",
                 price: "799",
                 yearlyPrice: "7668",
+                period: "month",
+                description: "Perfect for small property portfolios starting out",
                 features: [
                   "Capacity 1-3 properties",
                   "Multi‑property dashboard",
@@ -165,6 +167,8 @@ const LandingPage = () => {
                 name: "Professional",
                 price: "1499",
                 yearlyPrice: "14390",
+                period: "month",
+                description: "Ideal for growing property management businesses",
                 features: [
                   "Capacity 4–8 properties",
                   "Multi‑property dashboard",
@@ -185,6 +189,8 @@ const LandingPage = () => {
                 name: "Portfolio",
                 price: "2499",
                 yearlyPrice: "23990",
+                period: "month",
+                description: "For established portfolios with multiple properties",
                 features: [
                   "Capacity 9–15 properties",
                   "Multi‑property dashboard",

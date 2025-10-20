@@ -1,0 +1,5 @@
+# Supabase Configuration File
+
+[functions.delete-user]
+verify_jwt = true
+

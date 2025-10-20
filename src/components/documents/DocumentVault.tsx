@@ -31,6 +31,8 @@ import { useAuth } from '../../hooks/useAuth';
 import { fetchUserDocuments, uploadDocument, softDeleteDocument } from '../../utils/documentUpload';
 import { supabase } from '../../lib/supabase';
 import { getRelativeTime } from '../../utils/timezoneUtils';
+import { formatFileSize } from '../../utils/propertyImages';
+import { getUserSubscription, type UserSubscription } from '../../utils/settingsUtils';
 
 interface Document {
   id: string;
@@ -87,6 +89,7 @@ export const DocumentVault: React.FC = () => {
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
 
   const handleLogout = async () => {
     await logout();
@@ -107,6 +110,14 @@ export const DocumentVault: React.FC = () => {
         console.log('Starting data fetch...');
         setLoading(true);
         
+        // Fetch user subscription plan for storage limit display
+        try {
+          const subscription = await getUserSubscription(user.id);
+          setUserSubscription(subscription);
+        } catch (e) {
+          console.warn('Failed to fetch user subscription for DocumentVault:', e);
+        }
+
         // Fetch documents
         console.log('Fetching user documents...');
         const documentsData = await fetchUserDocuments();
@@ -136,7 +147,7 @@ export const DocumentVault: React.FC = () => {
           doc_type: doc.doc_type,
           propertyName: doc.property_id ? (propertiesMap.get(doc.property_id) || 'Unknown Property') : 'General',
           type: doc.doc_type || 'Unknown',
-          size: 'Unknown', // Size not stored in actual table
+          size: doc.file_size ? formatFileSize(doc.file_size) : 'Unknown',
           uploadDate: doc.uploaded_at || '',
           url: doc.url,
           thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400'
@@ -215,7 +226,7 @@ export const DocumentVault: React.FC = () => {
         doc_type: doc.doc_type,
         propertyName: propertiesMap.get(doc.property_id || '') || 'Unknown Property',
         type: doc.doc_type || 'Unknown',
-        size: 'Unknown',
+        size: doc.file_size ? formatFileSize(doc.file_size) : 'Unknown',
         uploadDate: doc.uploaded_at || '',
         url: doc.url || '',
         thumbnail: '/api/placeholder/150/150'
@@ -283,7 +294,7 @@ export const DocumentVault: React.FC = () => {
         doc_type: doc.doc_type,
         propertyName: doc.property_id ? (propertiesMap.get(doc.property_id) || 'Unknown Property') : 'General',
         type: doc.doc_type || 'Unknown',
-        size: 'Unknown',
+        size: doc.file_size ? formatFileSize(doc.file_size) : 'Unknown',
         uploadDate: doc.uploaded_at || '',
         url: doc.url,
         thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400'
@@ -312,11 +323,82 @@ export const DocumentVault: React.FC = () => {
     return matchesSearch && matchesCategory;
   });
 
-  // Calculate real stats from documents
+  // Calculate real stats from documents and property images
+  // We need to get the raw file_size from the database for accurate calculation
+  const [totalStorageBytes, setTotalStorageBytes] = useState(0);
+  
+  useEffect(() => {
+    const calculateStorage = async () => {
+      if (!user?.id) return;
+      
+      try {
+        // Get documents storage
+        const { data: documentsData, error: documentsError } = await supabase
+          .from('documents')
+          .select('file_size')
+          .eq('uploaded_by', user.id)
+          .not('name', 'like', '[DELETED]%');
+          
+        if (documentsError) {
+          console.error('Error fetching documents storage:', documentsError);
+          throw documentsError;
+        }
+        
+        // Get user's property IDs first
+        const { data: userProperties, error: propertiesError } = await supabase
+          .from('properties')
+          .select('id')
+          .eq('owner_id', user.id)
+          .eq('active', 'Y');
+          
+        if (propertiesError) {
+          console.error('Error fetching properties:', propertiesError);
+          throw propertiesError;
+        }
+        
+        const propertyIds = userProperties?.map(p => p.id) || [];
+        
+        // Get property images storage using the property IDs
+        let imagesData = [];
+        if (propertyIds.length > 0) {
+          const { data, error: imagesError } = await supabase
+            .from('property_images')
+            .select('image_size')
+            .in('property_id', propertyIds);
+            
+          if (imagesError) {
+            console.error('Error fetching images storage:', imagesError);
+            throw imagesError;
+          }
+          imagesData = data || [];
+        }
+        
+        // Calculate total storage from both sources
+        const documentsBytes = documentsData?.reduce((sum, doc) => sum + (doc.file_size || 0), 0) || 0;
+        const imagesBytes = imagesData?.reduce((sum, img) => sum + (img.image_size || 0), 0) || 0;
+        const totalBytes = documentsBytes + imagesBytes;
+        
+        console.log('Storage calculation:', {
+          documentsCount: documentsData?.length || 0,
+          documentsBytes,
+          imagesCount: imagesData?.length || 0,
+          imagesBytes,
+          totalBytes
+        });
+        
+        setTotalStorageBytes(totalBytes);
+      } catch (error) {
+        console.error('Error calculating storage:', error);
+      }
+    };
+    
+    calculateStorage();
+  }, [user?.id, documents.length]);
+
   const stats = {
     totalDocuments: documents.length,
     expiringDocuments: 0, // We don't have expiry dates in the current schema
-    storageUsed: 'Unknown', // Size not stored in current schema
+    storageUsed: formatFileSize(totalStorageBytes),
     categoriesCount: new Set(documents.map(doc => doc.doc_type)).size
   };
 
@@ -639,9 +721,15 @@ export const DocumentVault: React.FC = () => {
                 <Folder className="w-6 h-6 text-green-800" />
               </div>
             </div>
-            <h3 className="text-sm font-medium text-glass-muted mb-1">Storage Used</h3>
+            <h3 className="text-sm font-medium text-glass-muted mb-1">Total Storage Used</h3>
             <p className="text-3xl font-bold text-glass">{stats.storageUsed}</p>
-            <p className="text-sm text-green-700 mt-2">of 1 GB</p>
+          <p className="text-sm text-green-700 mt-2">
+            of {userSubscription?.plan?.storage_limit_mb === -1 
+              ? 'Unlimited' 
+              : userSubscription?.plan?.storage_limit_mb != null 
+                ? formatFileSize(userSubscription.plan.storage_limit_mb * 1024 * 1024)
+                : '—'}
+          </p>
           </div>
 
           <div className="glass-card rounded-xl p-6 glow">

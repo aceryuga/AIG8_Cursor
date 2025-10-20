@@ -10,6 +10,7 @@ export interface DocumentMetadata {
   doc_type?: string;
   uploaded_by?: string;
   uploaded_at?: string;
+  file_size?: number; // File size in bytes
 }
 
 export interface UploadProgress {
@@ -101,7 +102,7 @@ export const uploadDocument = async (
       throw new Error('User not authenticated');
     }
 
-    // Save metadata
+    // Save metadata with file size
     const metadata = await saveDocumentMetadata({
       name: file.name,
       url,
@@ -109,7 +110,8 @@ export const uploadDocument = async (
       lease_id: leaseId,
       tenant_id: tenantId,
       doc_type: docType,
-      uploaded_by: user.id
+      uploaded_by: user.id,
+      file_size: file.size // Store file size in bytes
     });
 
     return metadata;

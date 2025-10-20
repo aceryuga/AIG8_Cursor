@@ -140,29 +140,42 @@ export const calculateStorageUsed = async (userId: string): Promise<number> => {
   try {
     let totalStorageMB = 0;
     
-    // Calculate storage from property images using actual file sizes
-    const { data: propertyImages, error: propertyImagesError } = await supabase
-      .from('property_images')
-      .select(`
-        image_size,
-        properties!inner(owner_id)
-      `)
-      .eq('properties.owner_id', userId);
+    // Get user's property IDs first
+    const { data: userProperties, error: propertiesError } = await supabase
+      .from('properties')
+      .select('id')
+      .eq('owner_id', userId)
+      .eq('active', 'Y');
     
-    if (propertyImagesError) {
-      console.error('Error fetching property images for storage calculation:', propertyImagesError);
-    } else if (propertyImages) {
-      const propertyImageStorageMB = propertyImages.reduce((acc, img) => {
-        return acc + (img.image_size || 0) / (1024 * 1024); // Convert bytes to MB
-      }, 0);
-      totalStorageMB += propertyImageStorageMB;
+    if (propertiesError) {
+      console.error('Error fetching properties for storage calculation:', propertiesError);
+    }
+    
+    const propertyIds = userProperties?.map(p => p.id) || [];
+    
+    // Calculate storage from property images using property IDs
+    if (propertyIds.length > 0) {
+      const { data: propertyImages, error: propertyImagesError } = await supabase
+        .from('property_images')
+        .select('image_size')
+        .in('property_id', propertyIds);
+      
+      if (propertyImagesError) {
+        console.error('Error fetching property images for storage calculation:', propertyImagesError);
+      } else if (propertyImages) {
+        const propertyImageStorageMB = propertyImages.reduce((acc, img) => {
+          return acc + (img.image_size || 0) / (1024 * 1024); // Convert bytes to MB
+        }, 0);
+        totalStorageMB += propertyImageStorageMB;
+      }
     }
     
     // Calculate storage from document uploads
     const { data: documents, error: documentsError } = await supabase
       .from('documents')
       .select('file_size')
-      .eq('uploaded_by', userId);
+      .eq('uploaded_by', userId)
+      .not('name', 'like', '[DELETED]%');
     
     if (documentsError) {
       console.error('Error fetching documents for storage calculation:', documentsError);
@@ -173,7 +186,7 @@ export const calculateStorageUsed = async (userId: string): Promise<number> => {
       totalStorageMB += documentStorageMB;
     }
     
-    return Math.ceil(totalStorageMB); // Round up to nearest MB
+    return Math.round(totalStorageMB * 100) / 100; // Round to 2 decimal places
   } catch (error) {
     console.error('Error calculating storage used:', error);
     return 0;

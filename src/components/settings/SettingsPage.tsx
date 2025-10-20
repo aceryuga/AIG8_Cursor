@@ -6,22 +6,18 @@ import {
   Bell, 
   HelpCircle, 
   User, 
-  Settings as SettingsIcon,
   Mail,
   Phone,
   Lock,
   Shield,
   CreditCard,
-  Database,
   Eye,
   EyeOff,
   Check,
-  Download,
   Trash2,
   AlertTriangle,
   CheckCircle,
   Smartphone,
-  Globe,
   Calendar,
   BarChart3,
   FileText,
@@ -33,11 +29,12 @@ import { Input } from '../webapp-ui/Input';
 import { NotificationBell } from '../ui/NotificationBell';
 import { PasswordStrength } from '../webapp-ui/PasswordStrength';
 import { useAuth } from '../../hooks/useAuth';
-import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
+// import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 import { validateEmail, validatePhone, validatePassword } from '../../utils/validation';
 import { sanitizeText, sanitizeEmail, sanitizePhone } from '../../utils/security';
 import { ErrorAuditTest } from '../test/ErrorAuditTest';
 import { canAccessTesting } from '../../utils/adminUtils';
+import { purgeUserData } from '../../utils/accountDeletion';
 import { 
   getUserSettings, 
   createUserSettings, 
@@ -45,8 +42,6 @@ import {
   getSubscriptionPlans,
   getUserSubscription,
   getBillingHistory,
-  getLoginActivity,
-  createDataExportRequest,
   updateUserProfile,
   getUserProfile,
   getActivePropertyCount,
@@ -56,9 +51,7 @@ import {
   formatFileSize,
   type UserSettings,
   type SubscriptionPlan as UtilsSubscriptionPlan,
-  type UserSubscription,
-  type BillingHistory,
-  type LoginActivity as UtilsLoginActivity
+  type UserSubscription
 } from '../../utils/settingsUtils';
 
 interface ProfileForm {
@@ -79,8 +72,6 @@ interface NotificationSettings {
   smsNotifications: boolean;
   paymentReminders: boolean;
   leaseExpiry: boolean;
-  maintenanceAlerts: boolean;
-  marketingEmails: boolean;
   reminderTiming: 'immediate' | '1day' | '3days' | '1week';
   quietHours: boolean;
   quietStart: string;
@@ -89,28 +80,7 @@ interface NotificationSettings {
 
 
 
-// Helper function to format login activity for display
-const formatLoginActivity = (activity: UtilsLoginActivity) => {
-  const deviceInfo = activity.device_info || `${activity.browser || 'Unknown'} on ${activity.os || 'Unknown'}`;
-  const location = activity.city && activity.country ? `${activity.city}, ${activity.country}` : 'Unknown Location';
-  const timestamp = new Date(activity.login_at).toLocaleString('en-IN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  });
-  
-  return {
-    id: activity.id,
-    device: deviceInfo,
-    location: location,
-    timestamp: timestamp,
-    ip: activity.ip_address || 'Unknown',
-    status: activity.status
-  };
-};
+// Login activity formatting function removed
 
 export const SettingsPage: React.FC = () => {
   const { tab } = useParams<{ tab?: string }>();
@@ -131,8 +101,6 @@ export const SettingsPage: React.FC = () => {
     smsNotifications: true,
     paymentReminders: true,
     leaseExpiry: true,
-    maintenanceAlerts: true,
-    marketingEmails: false,
     reminderTiming: '3days',
     quietHours: true,
     quietStart: '22:00',
@@ -145,7 +113,7 @@ export const SettingsPage: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [testNotificationSent, setTestNotificationSent] = useState(false);
+  
   
   // Subscription plan change state
   const [planChangeLoading, setPlanChangeLoading] = useState<string | null>(null);
@@ -155,8 +123,8 @@ export const SettingsPage: React.FC = () => {
   const [userSettings, setUserSettings] = useState<UserSettings | null>(null);
   const [subscriptionPlans, setSubscriptionPlans] = useState<UtilsSubscriptionPlan[]>([]);
   const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
-  const [billingHistory, setBillingHistory] = useState<BillingHistory[]>([]);
-  const [loginActivity, setLoginActivity] = useState<UtilsLoginActivity[]>([]);
+  // const [billingHistory, setBillingHistory] = useState<BillingHistory[]>([]);
+  // Login activity state removed per request
   const [dataLoading, setDataLoading] = useState(true);
   
   const { user, logout, updatePassword } = useAuth();
@@ -166,7 +134,7 @@ export const SettingsPage: React.FC = () => {
   useEffect(() => {
     if (tab) {
       // Validate that the tab exists in our sections
-      const validTabs = ['profile', 'security', 'notifications', 'subscription', 'privacy', 'testing'];
+      const validTabs = ['profile', 'security', 'notifications', 'subscription', 'testing'];
       if (validTabs.includes(tab)) {
         setActiveSection(tab);
       } else {
@@ -191,14 +159,12 @@ export const SettingsPage: React.FC = () => {
           settings,
           plans,
           subscription,
-          billing,
-          activity
+          billing
         ] = await Promise.allSettled([
           getUserSettings(user.id),
           getSubscriptionPlans(),
           getUserSubscription(user.id),
-          getBillingHistory(user.id),
-          getLoginActivity(user.id)
+          getBillingHistory(user.id)
         ]);
 
         // Handle each result individually
@@ -206,7 +172,7 @@ export const SettingsPage: React.FC = () => {
         const plansData = plans.status === 'fulfilled' ? plans.value : [];
         const subscriptionData = subscription.status === 'fulfilled' ? subscription.value : null;
         const billingData = billing.status === 'fulfilled' ? billing.value : [];
-        const activityData = activity.status === 'fulfilled' ? activity.value : [];
+        // Login activity removed
 
         // Log any errors for debugging
         if (settings.status === 'rejected') {
@@ -221,9 +187,7 @@ export const SettingsPage: React.FC = () => {
         if (billing.status === 'rejected') {
           console.warn('Failed to load billing history:', billing.reason);
         }
-        if (activity.status === 'rejected') {
-          console.warn('Failed to load login activity:', activity.reason);
-        }
+        // No login activity warnings
 
         // Set user settings or create default ones
         if (settingsData) {
@@ -233,8 +197,6 @@ export const SettingsPage: React.FC = () => {
             smsNotifications: settingsData.sms_notifications,
             paymentReminders: settingsData.payment_reminders,
             leaseExpiry: settingsData.lease_expiry_alerts,
-            maintenanceAlerts: settingsData.maintenance_alerts,
-            marketingEmails: settingsData.marketing_emails,
             reminderTiming: settingsData.reminder_timing,
             quietHours: settingsData.quiet_hours_enabled,
             quietStart: settingsData.quiet_hours_start,
@@ -254,8 +216,6 @@ export const SettingsPage: React.FC = () => {
               sms_notifications: true,
               payment_reminders: true,
               lease_expiry_alerts: true,
-              maintenance_alerts: true,
-              marketing_emails: false,
               reminder_timing: '3days',
               quiet_hours_enabled: true,
               quiet_hours_start: '22:00',
@@ -272,8 +232,6 @@ export const SettingsPage: React.FC = () => {
                 smsNotifications: true,
                 paymentReminders: true,
                 leaseExpiry: true,
-                maintenanceAlerts: true,
-                marketingEmails: false,
                 reminderTiming: '3days',
                 quietHours: true,
                 quietStart: '22:00',
@@ -309,8 +267,7 @@ export const SettingsPage: React.FC = () => {
           setUserSubscription(subscriptionData);
         }
         
-        setBillingHistory(billingData);
-        setLoginActivity(activityData);
+        // Billing history UI is disabled in MVP; retain fetch for future but don't store in state
 
         // Load user profile
         const profile = await getUserProfile(user.id);
@@ -355,7 +312,6 @@ export const SettingsPage: React.FC = () => {
     { id: 'security', name: 'Password & Security', icon: Shield },
     { id: 'notifications', name: 'Notifications', icon: Bell },
     { id: 'subscription', name: 'Subscription Plan', icon: CreditCard },
-    { id: 'privacy', name: 'Data & Privacy', icon: Database },
     // Only show testing section in development or for admin users
     ...(canAccessTesting(user?.email) 
       ? [{ id: 'testing', name: 'Error & Audit Testing', icon: AlertTriangle }] 
@@ -456,8 +412,6 @@ export const SettingsPage: React.FC = () => {
           sms_notifications: true,
           payment_reminders: true,
           lease_expiry_alerts: true,
-          maintenance_alerts: true,
-          marketing_emails: false,
           reminder_timing: '3days',
           quiet_hours_enabled: true,
           quiet_hours_start: '22:00',
@@ -552,9 +506,7 @@ export const SettingsPage: React.FC = () => {
                      field === 'reminderTiming' ? 'reminder_timing' :
                      field === 'emailNotifications' ? 'email_notifications' :
                      field === 'smsNotifications' ? 'sms_notifications' :
-                     field === 'paymentReminders' ? 'payment_reminders' :
-                     field === 'maintenanceAlerts' ? 'maintenance_alerts' :
-                     field === 'marketingEmails' ? 'marketing_emails' : field;
+                     field === 'paymentReminders' ? 'payment_reminders' : field;
 
       if (userSettings) {
         await updateUserSettings(user.id, { [dbField]: newValue });
@@ -566,8 +518,6 @@ export const SettingsPage: React.FC = () => {
           sms_notifications: field === 'smsNotifications' ? newValue : true,
           payment_reminders: field === 'paymentReminders' ? newValue : true,
           lease_expiry_alerts: field === 'leaseExpiry' ? newValue : true,
-          maintenance_alerts: field === 'maintenanceAlerts' ? newValue : true,
-          marketing_emails: field === 'marketingEmails' ? newValue : false,
           reminder_timing: '3days',
           quiet_hours_enabled: field === 'quietHours' ? newValue : true,
           quiet_hours_start: '22:00',
@@ -587,65 +537,28 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleNotificationChange = async (field: keyof NotificationSettings, value: string) => {
-    if (!user?.id) return;
-    
-    setNotificationSettings(prev => ({
-      ...prev,
-      [field]: value
-    }));
+  
 
-    // Update in database
-    try {
-      const dbField = field === 'reminderTiming' ? 'reminder_timing' :
-                     field === 'quietStart' ? 'quiet_hours_start' :
-                     field === 'quietEnd' ? 'quiet_hours_end' : field;
-
-      if (userSettings) {
-        await updateUserSettings(user.id, { [dbField]: value });
-      }
-    } catch (error) {
-      console.error('Error updating notification settings:', error);
-    }
-  };
-
-  const sendTestNotification = async () => {
-    setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setLoading(false);
-    setTestNotificationSent(true);
-    setTimeout(() => setTestNotificationSent(false), 3000);
-  };
-
-  const exportData = async () => {
-    if (!user?.id) return;
-    
-    setLoading(true);
-    try {
-      // Create data export request
-      const exportRequest = await createDataExportRequest(user.id, 'full');
-      
-      if (exportRequest) {
-        alert('Data export request submitted. You will receive an email when the export is ready for download.');
-      } else {
-        throw new Error('Failed to create export request');
-      }
-    } catch (error) {
-      console.error('Error creating data export:', error);
-      alert('Failed to create data export request. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Data export functionality removed with Data & Privacy section
+  // const exportData = async () => { ... };
 
   const handleDeleteAccount = async () => {
-    setLoading(true);
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setLoading(false);
-    setShowDeleteDialog(false);
+    if (!user?.id) return;
     
-    // In a real app, this would delete the account and redirect
-    alert('Account deletion request submitted. You will receive a confirmation email.');
+    setLoading(true);
+    try {
+      await purgeUserData(user.id);
+      
+      // Log out and redirect to login
+      await logout();
+      navigate('/auth/login');
+    } catch (error) {
+      console.error('Error deleting account:', error);
+      alert('Failed to delete account. Please contact support.');
+    } finally {
+      setLoading(false);
+      setShowDeleteDialog(false);
+    }
   };
 
   const handlePlanChange = async (newPlanId: string) => {
@@ -863,6 +776,42 @@ export const SettingsPage: React.FC = () => {
                     </Button>
                   </div>
                 </form>
+
+                {/* Delete Account Section */}
+                <div className="glass-card rounded-xl p-6 border-l-4 border-red-500 mt-6">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
+                      <Trash2 className="w-6 h-6 text-red-600" />
+                    </div>
+                    <div>
+                      <h2 className="text-xl font-semibold text-glass">Delete Account</h2>
+                      <p className="text-glass-muted">Permanently delete your account and all data</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="glass rounded-lg p-4 bg-red-50 bg-opacity-10">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <h3 className="font-medium text-red-600 mb-1">Warning: This action cannot be undone</h3>
+                          <p className="text-sm text-glass-muted">
+                            Deleting your account will immediately and permanently remove all your properties, leases, 
+                            payments, documents, and personal data from all databases and storage. This action cannot be reversed.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <Button
+                      onClick={() => setShowDeleteDialog(true)}
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700 border-red-600 hover:border-red-700"
+                    >
+                      Delete My Account
+                    </Button>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -959,58 +908,7 @@ export const SettingsPage: React.FC = () => {
                   </form>
                 </div>
 
-                {/* Login Activity */}
-                <div className="glass-card rounded-xl p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center glow">
-                      <Shield className="w-6 h-6 text-green-800" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-glass">Login Activity</h2>
-                      <p className="text-glass-muted">Recent login attempts and sessions</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    {dataLoading ? (
-                      <div className="text-center py-8">
-                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-800 mx-auto"></div>
-                        <p className="text-glass-muted mt-2">Loading login activity...</p>
-                      </div>
-                    ) : loginActivity.length === 0 ? (
-                      <div className="text-center py-8">
-                        <p className="text-glass-muted">No login activity found</p>
-                      </div>
-                    ) : (
-                      loginActivity.map((activity) => {
-                        const formattedActivity = formatLoginActivity(activity);
-                        return (
-                          <div key={activity.id} className="glass rounded-lg p-4">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                <div className={`w-3 h-3 rounded-full ${
-                                  activity.status === 'success' ? 'bg-green-500' : 'bg-red-500'
-                                }`} />
-                                <div>
-                                  <p className="font-medium text-glass">{formattedActivity.device}</p>
-                                  <p className="text-sm text-glass-muted">{formattedActivity.location} • {formattedActivity.ip}</p>
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <p className="text-sm text-glass">{formattedActivity.timestamp}</p>
-                                <p className={`text-xs font-medium ${
-                                  activity.status === 'success' ? 'text-green-700' : 'text-red-600'
-                                }`}>
-                                  {activity.status === 'success' ? 'Successful' : 'Failed'}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
+                {/* Login Activity removed per request */}
               </div>
             )}
 
@@ -1036,9 +934,7 @@ export const SettingsPage: React.FC = () => {
                         { key: 'emailNotifications', label: 'Email Notifications', description: 'Receive notifications via email', icon: Mail },
                         { key: 'smsNotifications', label: 'SMS Notifications', description: 'Receive notifications via SMS', icon: Smartphone },
                         { key: 'paymentReminders', label: 'Payment Reminders', description: 'Reminders for upcoming rent payments', icon: CreditCard },
-                        { key: 'leaseExpiry', label: 'Lease Expiry Alerts', description: 'Alerts when leases are about to expire', icon: Calendar },
-                        { key: 'maintenanceAlerts', label: 'Maintenance Alerts', description: 'Notifications for maintenance requests', icon: SettingsIcon },
-                        { key: 'marketingEmails', label: 'Marketing Emails', description: 'Product updates and promotional content', icon: Globe }
+                        { key: 'leaseExpiry', label: 'Lease Expiry Alerts', description: 'Alerts when leases are about to expire', icon: Calendar }
                       ].map((item) => (
                         <div key={item.key} className="flex items-center justify-between p-4 glass rounded-lg">
                           <div className="flex items-center gap-3">
@@ -1062,95 +958,7 @@ export const SettingsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Timing Settings */}
-                  <div>
-                    <h3 className="text-lg font-medium text-glass mb-4">Timing Settings</h3>
-                    <div className="space-y-4">
-                      <div className="glass rounded-lg p-4">
-                        <label className="block text-sm font-medium text-glass mb-2">Reminder Timing</label>
-                        <select
-                          value={notificationSettings.reminderTiming}
-                          onChange={(e) => handleNotificationChange('reminderTiming', e.target.value)}
-                          className="w-full glass-input rounded-lg px-3 py-2 text-glass"
-                        >
-                          <option value="immediate">Immediate</option>
-                          <option value="1day">1 day before</option>
-                          <option value="3days">3 days before</option>
-                          <option value="1week">1 week before</option>
-                        </select>
-                      </div>
-
-                      <div className="glass rounded-lg p-4">
-                        <div className="flex items-center justify-between mb-4">
-                          <div>
-                            <p className="font-medium text-glass">Quiet Hours</p>
-                            <p className="text-sm text-glass-muted">Disable notifications during specific hours</p>
-                          </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={notificationSettings.quietHours}
-                              onChange={() => handleNotificationToggle('quietHours')}
-                              className="sr-only peer"
-                            />
-                            <div className="w-11 h-6 bg-white bg-opacity-20 border-2 border-green-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white peer-checked:border-green-800 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-2 after:border-green-800 after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-800"></div>
-                          </label>
-                        </div>
-
-                        {notificationSettings.quietHours && (
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-sm font-medium text-glass mb-1">Start Time</label>
-                              <input
-                                type="time"
-                                value={notificationSettings.quietStart}
-                                onChange={(e) => handleNotificationChange('quietStart', e.target.value)}
-                                className="w-full glass-input rounded-lg px-3 py-2 text-glass"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-glass mb-1">End Time</label>
-                              <input
-                                type="time"
-                                value={notificationSettings.quietEnd}
-                                onChange={(e) => handleNotificationChange('quietEnd', e.target.value)}
-                                className="w-full glass-input rounded-lg px-3 py-2 text-glass"
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Test Notifications */}
-                  <div className="glass rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-glass">Test Notifications</p>
-                        <p className="text-sm text-glass-muted">Send a test notification to verify your settings</p>
-                      </div>
-                      <Button
-                        onClick={sendTestNotification}
-                        loading={loading}
-                        disabled={loading || testNotificationSent}
-                        variant="outline"
-                        className="flex items-center gap-2"
-                      >
-                        {testNotificationSent ? (
-                          <>
-                            <CheckCircle size={16} />
-                            Sent!
-                          </>
-                        ) : (
-                          <>
-                            <Zap size={16} />
-                            Send Test
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
+                  {/* Timing and Test sections removed per requirements */}
                 </div>
               </div>
             )}
@@ -1356,19 +1164,6 @@ export const SettingsPage: React.FC = () => {
                                   : 'Within limits'}
                           </p>
                         </div>
-
-                        <div className="glass-card rounded-lg p-4">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-glass-muted">API Calls</span>
-                            <span className="text-glass font-medium">
-                              {(userSubscription?.api_calls_used || 0).toLocaleString()} / ∞
-                            </span>
-                          </div>
-                          <div className="w-full glass-input rounded-full h-2">
-                            <div className="bg-green-800 h-2 rounded-full" style={{ width: '25%' }} />
-                          </div>
-                          <p className="text-xs text-green-800 mt-1">Within limits</p>
-                        </div>
                       </>
                     )}
                   </div>
@@ -1386,176 +1181,20 @@ export const SettingsPage: React.FC = () => {
                         <p className="text-glass-muted">Download invoices and receipts</p>
                       </div>
                     </div>
-                    <Button variant="outline" className="flex items-center gap-2">
-                      <Download size={16} />
-                      Download All
-                    </Button>
-                  </div>
-
-                  <div className="space-y-3">
-                    {dataLoading ? (
-                      <div className="text-center py-8">
-                        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-green-800 mx-auto"></div>
-                        <p className="text-glass-muted mt-2">Loading billing history...</p>
-                      </div>
-                    ) : billingHistory.length === 0 ? (
-                      <div className="text-center py-8">
-                        <p className="text-glass-muted">No billing history found</p>
-                      </div>
-                    ) : (
-                      billingHistory.map((invoice) => (
-                        <div key={invoice.id} className="flex items-center justify-between p-4 glass-card rounded-lg">
-                          <div>
-                            <p className="font-medium text-glass">
-                              {subscriptionPlans.find(p => p.id === invoice.subscription_id)?.name || 'Unknown'} Plan
-                            </p>
-                            <p className="text-sm text-glass-muted">
-                              {formatDateDDMMYYYY(invoice.billing_period_start)} - {formatDateDDMMYYYY(invoice.billing_period_end)}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-4">
-                            <div className="text-right">
-                              <p className="font-medium text-glass">{formatCurrency(invoice.amount, invoice.currency)}</p>
-                              <p className={`text-sm ${
-                                invoice.status === 'paid' ? 'text-green-800' :
-                                invoice.status === 'pending' ? 'text-orange-600' :
-                                invoice.status === 'failed' ? 'text-red-600' : 'text-glass-muted'
-                              }`}>
-                                {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
-                              </p>
-                            </div>
-                            {invoice.invoice_url && (
-                              <a href={invoice.invoice_url} target="_blank" rel="noopener noreferrer">
-                                <Button variant="ghost" size="sm" className="p-2">
-                                  <Download size={14} />
-                                </Button>
-                              </a>
-                            )}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Data & Privacy */}
-            {activeSection === 'privacy' && (
-              <div className="space-y-6">
-                {/* Data Export */}
-                <div className="glass-card rounded-xl p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center glow">
-                      <Download className="w-6 h-6 text-green-800" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-glass">Export Your Data</h2>
-                      <p className="text-glass-muted">Download a copy of all your data</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <p className="text-glass-muted">
-                      You can request a copy of all your data including properties, payments, documents, and account information. 
-                      The export will be provided in JSON format.
-                    </p>
                     
-                    <div className="flex items-center gap-4">
-                      <Button onClick={exportData} className="flex items-center gap-2">
-                        <Download size={16} />
-                        Export Data
-                      </Button>
-                      <p className="text-sm text-glass-muted">
-                        Last export: Never
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* GDPR Information */}
-                <div className="glass-card rounded-xl p-6">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center glow">
-                      <Shield className="w-6 h-6 text-green-800" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-glass">Privacy & GDPR</h2>
-                      <p className="text-glass-muted">Your privacy rights and data protection</p>
-                    </div>
                   </div>
 
-                  <div className="space-y-4">
-                    <div className="glass rounded-lg p-4">
-                      <h3 className="font-medium text-glass mb-2">Data We Collect</h3>
-                      <ul className="text-sm text-glass-muted space-y-1">
-                        <li>• Account information (name, email, phone)</li>
-                        <li>• Property details and financial data</li>
-                        <li>• Payment history and transaction records</li>
-                        <li>• Uploaded documents and files</li>
-                        <li>• Usage analytics and preferences</li>
-                      </ul>
-                    </div>
-
-                    <div className="glass rounded-lg p-4">
-                      <h3 className="font-medium text-glass mb-2">Your Rights</h3>
-                      <ul className="text-sm text-glass-muted space-y-1">
-                        <li>• Right to access your personal data</li>
-                        <li>• Right to rectify inaccurate data</li>
-                        <li>• Right to erase your data</li>
-                        <li>• Right to restrict processing</li>
-                        <li>• Right to data portability</li>
-                      </ul>
-                    </div>
-
-                    <div className="flex gap-4">
-                      <Button variant="outline">
-                        Privacy Policy
-                      </Button>
-                      <Button variant="outline">
-                        Terms of Service
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Delete Account */}
-                <div className="glass-card rounded-xl p-6 border-l-4 border-red-500">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
-                      <Trash2 className="w-6 h-6 text-red-600" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-semibold text-glass">Delete Account</h2>
-                      <p className="text-glass-muted">Permanently delete your account and all data</p>
-                    </div>
+                  <div className="mb-4 p-3 rounded-lg bg-yellow-100 bg-opacity-20 border border-yellow-500 border-opacity-30">
+                    <p className="text-sm text-yellow-700">
+                      This is an MVP prototype and this section is not implemented yet
+                    </p>
                   </div>
 
-                  <div className="space-y-4">
-                    <div className="glass rounded-lg p-4 bg-red-50 bg-opacity-10">
-                      <div className="flex items-start gap-3">
-                        <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
-                        <div>
-                          <h3 className="font-medium text-red-600 mb-1">Warning: This action cannot be undone</h3>
-                          <p className="text-sm text-glass-muted">
-                            Deleting your account will permanently remove all your properties, payments, documents, 
-                            and personal data. This action cannot be reversed.
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Button
-                      onClick={() => setShowDeleteDialog(true)}
-                      variant="outline"
-                      className="text-red-600 hover:text-red-700 border-red-600 hover:border-red-700"
-                    >
-                      Delete My Account
-                    </Button>
-                  </div>
+                  
                 </div>
               </div>
             )}
+
 
             {/* Error & Audit Testing */}
             {activeSection === 'testing' && (
@@ -1606,8 +1245,17 @@ export const SettingsPage: React.FC = () => {
               
               <div className="space-y-4">
                 <p className="text-glass-muted">
-                  Are you sure you want to delete your account? All your data including properties, 
-                  payments, and documents will be permanently removed.
+                  Are you sure you want to delete your account? This will immediately and permanently:
+                </p>
+                <ul className="text-sm text-glass-muted list-disc list-inside space-y-1 ml-2">
+                  <li>Delete all properties, leases, and tenant information</li>
+                  <li>Delete all payment records and financial data</li>
+                  <li>Delete all documents and images from storage</li>
+                  <li>Delete your account settings and preferences</li>
+                  <li>Remove all data from the database</li>
+                </ul>
+                <p className="text-red-600 font-medium text-sm">
+                  This action cannot be undone and your data cannot be recovered.
                 </p>
                 
                 <div className="flex gap-3">

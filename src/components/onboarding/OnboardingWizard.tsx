@@ -30,7 +30,7 @@ interface OnboardingData {
   // Property Basics
   propertyName: string;
   address: string;
-  propertyType: 'apartment' | 'villa' | 'office' | 'shop' | '';
+  propertyType: 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa' | '';
   bedrooms: number;
   bathrooms: number;
   area: number;
@@ -322,9 +322,16 @@ export const OnboardingWizard: React.FC = () => {
                   >
                     <option value="">Select property type</option>
                     <option value="apartment">Apartment</option>
-                    <option value="villa">Villa</option>
+                    <option value="co-working-space">Co-working Space</option>
+                    <option value="duplex">Duplex</option>
+                    <option value="independent-house">Independent House</option>
                     <option value="office">Office</option>
+                    <option value="penthouse">Penthouse</option>
+                    <option value="retail-space">Retail Space</option>
+                    <option value="serviced-apartment">Serviced Apartment</option>
                     <option value="shop">Shop</option>
+                    <option value="studio-apartment">Studio Apartment</option>
+                    <option value="villa">Villa</option>
                   </select>
                   {errors.propertyType && (
                     <p className="text-sm text-red-600">{errors.propertyType}</p>
@@ -339,6 +346,10 @@ export const OnboardingWizard: React.FC = () => {
                     onChange={handleChange('area')}
                     error={errors.area}
                     placeholder="1200"
+                    numericType="integer"
+                    min={1}
+                    max={100000}
+                    required
                   />
 
                   <Input
@@ -347,6 +358,9 @@ export const OnboardingWizard: React.FC = () => {
                     value={data.bedrooms}
                     onChange={handleChange('bedrooms')}
                     placeholder="2"
+                    numericType="integer"
+                    min={0}
+                    max={50}
                   />
 
                   <Input
@@ -355,6 +369,9 @@ export const OnboardingWizard: React.FC = () => {
                     value={data.bathrooms}
                     onChange={handleChange('bathrooms')}
                     placeholder="2"
+                    numericType="integer"
+                    min={0}
+                    max={50}
                   />
                 </div>
               </div>
@@ -382,6 +399,10 @@ export const OnboardingWizard: React.FC = () => {
                     error={errors.monthlyRent}
                     icon={<IndianRupee size={18} />}
                     placeholder="15000"
+                    numericType="monetary"
+                    min={0}
+                    max={10000000}
+                    required
                   />
 
                   <Input
@@ -392,6 +413,9 @@ export const OnboardingWizard: React.FC = () => {
                     error={errors.securityDeposit}
                     icon={<IndianRupee size={18} />}
                     placeholder="30000"
+                    numericType="monetary"
+                    min={0}
+                    max={100000000}
                   />
                 </div>
 
@@ -403,6 +427,9 @@ export const OnboardingWizard: React.FC = () => {
                     onChange={handleChange('maintenanceCharges')}
                     icon={<IndianRupee size={18} />}
                     placeholder="2000"
+                    numericType="monetary"
+                    min={0}
+                    max={100000000}
                   />
 
                   <Input
