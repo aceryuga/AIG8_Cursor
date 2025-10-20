@@ -20,6 +20,20 @@ import {
 interface PropertyGalleryProps {
   propertyId: string;
   onPrimaryImageChange?: (imageUrl: string) => void;
+  onModalStateChange?: (show: boolean) => void;
+  renderModalExternally?: boolean;
+  onModalDataChange?: (data: {
+    show: boolean;
+    selectedFiles: File[];
+    uploading: boolean;
+    uploadProgress: Record<string, number>;
+    setShowUploadModal: (show: boolean) => void;
+    setSelectedFiles: (files: File[]) => void;
+    setUploadProgress: (progress: Record<string, number>) => void;
+    handleFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    removeFile: (index: number) => void;
+    handleUpload: () => Promise<void>;
+  }) => void;
 }
 
 // Sortable Image Card Component
@@ -91,7 +105,7 @@ const SortableImageCard: React.FC<{ image: PropertyImage; index: number }> = ({ 
   );
 };
 
-export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId, onPrimaryImageChange }) => {
+export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId, onPrimaryImageChange, onModalStateChange, renderModalExternally = false, onModalDataChange }) => {
   const [images, setImages] = useState<PropertyImage[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -128,6 +142,31 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId, on
   useEffect(() => {
     fetchImages();
   }, [fetchImages]);
+
+  // Notify parent component when modal state changes
+  useEffect(() => {
+    if (onModalStateChange) {
+      onModalStateChange(showUploadModal);
+    }
+  }, [showUploadModal, onModalStateChange]);
+
+  // Pass modal data to parent when rendering externally
+  useEffect(() => {
+    if (renderModalExternally && onModalDataChange) {
+      onModalDataChange({
+        show: showUploadModal,
+        selectedFiles,
+        uploading,
+        uploadProgress,
+        setShowUploadModal,
+        setSelectedFiles,
+        setUploadProgress,
+        handleFileSelect,
+        removeFile,
+        handleUpload
+      });
+    }
+  }, [showUploadModal, selectedFiles, uploading, uploadProgress, renderModalExternally, onModalDataChange]);
 
   // Handle file selection
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -388,7 +427,7 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId, on
                 </Button>
               )}
               <Button
-                onClick={() => setShowUploadModal(true)}
+                  onClick={() => setShowUploadModal(true)}
                 className="flex items-center gap-2"
               >
                 <Plus size={16} />
@@ -503,7 +542,7 @@ export const PropertyGallery: React.FC<PropertyGalleryProps> = ({ propertyId, on
       )}
 
       {/* Upload Modal */}
-      {showUploadModal && (
+      {!renderModalExternally && showUploadModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="glass-card rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">

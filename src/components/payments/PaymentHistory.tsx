@@ -444,10 +444,10 @@ export const PaymentHistory: React.FC = () => {
             <p className="text-glass-muted">Track and manage all your rental payments</p>
           </div>
           <div className="flex gap-3">
-            <Link to="/payments/reconcile">
+            <Link to="/payments/reconciliation">
               <Button variant="outline" className="flex items-center gap-2">
                 <FileText size={18} />
-                AI Reconcile
+                AI Reconciliation
               </Button>
             </Link>
             <Link to="/payments/record">

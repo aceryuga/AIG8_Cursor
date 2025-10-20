@@ -245,27 +245,10 @@ export const SettingsPage: React.FC = () => {
 
         // Set subscription data
         setSubscriptionPlans(plansData);
+        setUserSubscription(subscriptionData);
         
-        // If no subscription exists, show default "Starter" plan
-        if (!subscriptionData && plansData.length > 0) {
-          const starterPlan = plansData.find(plan => plan.name === 'Starter');
-          if (starterPlan) {
-            const defaultSubscription = {
-              id: 'default',
-              user_id: user.id,
-              plan_id: starterPlan.id,
-              status: 'trial' as const,
-              started_at: new Date().toISOString(),
-              properties_used: 0,
-              storage_used_mb: 0,
-              api_calls_used: 0,
-              plan: starterPlan
-            };
-            setUserSubscription(defaultSubscription);
-          }
-        } else {
-          setUserSubscription(subscriptionData);
-        }
+        // Note: All users should now have subscription records created automatically
+        // via database trigger or backfill migration. No need for fake subscriptions.
         
         // Billing history UI is disabled in MVP; retain fetch for future but don't store in state
 

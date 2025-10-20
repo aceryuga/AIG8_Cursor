@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, Building2, LogOut, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Save, AlertCircle } from 'lucide-react';
+import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, Building2, LogOut, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Save, AlertCircle, Image as ImageIcon } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
@@ -121,6 +121,7 @@ export const PropertyDetails: React.FC = () => {
   const [showRecordPayment, setShowRecordPayment] = useState(false);
   const [showContactTenant, setShowContactTenant] = useState(false);
   const [showUploadDocument, setShowUploadDocument] = useState(false);
+  const [galleryModalData, setGalleryModalData] = useState<any>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showDeleteTenantConfirm, setShowDeleteTenantConfirm] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -1618,6 +1619,8 @@ export const PropertyDetails: React.FC = () => {
                     image: imageUrl
                   } : null);
                 }}
+                renderModalExternally={true}
+                onModalDataChange={setGalleryModalData}
               />
             )}
 
@@ -2300,7 +2303,7 @@ export const PropertyDetails: React.FC = () => {
       {/* Upload Document Modal */}
       {showUploadDocument && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
-          <div className="glass-card rounded-xl max-w-2xl w-full">
+          <div className="glass-card rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-6">
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
@@ -2559,6 +2562,126 @@ export const PropertyDetails: React.FC = () => {
           tenantName={currentProperty.tenant}
           tenantEmail={currentProperty.tenantEmail}
         />
+      )}
+
+      {/* Gallery Upload Modal - Rendered at root level */}
+      {galleryModalData?.show && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4">
+          <div className="glass-card rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 glass rounded-lg flex items-center justify-center">
+                    <Upload className="w-5 h-5 text-green-800" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-glass">Upload Images</h2>
+                </div>
+                <button
+                  onClick={() => {
+                    galleryModalData.setShowUploadModal(false);
+                    galleryModalData.setSelectedFiles([]);
+                    galleryModalData.setUploadProgress({});
+                  }}
+                  className="p-2 hover:bg-white hover:bg-opacity-20 rounded-lg transition-colors"
+                >
+                  <X size={20} className="text-glass-muted" />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div className="glass rounded-lg p-4">
+                  <h3 className="font-medium text-glass mb-2">Property</h3>
+                  <p className="text-glass">{currentProperty.name}</p>
+                </div>
+
+                {/* Drag and Drop Area */}
+                <div 
+                  className="border-2 border-dashed border-white border-opacity-30 rounded-lg p-6 text-center hover:border-green-800 transition-colors cursor-pointer"
+                  onClick={() => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.multiple = true;
+                    input.accept = 'image/*';
+                    input.onchange = galleryModalData.handleFileSelect;
+                    input.click();
+                  }}
+                >
+                  <Upload size={32} className="mx-auto text-glass-muted mb-4" />
+                  <p className="text-glass-muted mb-4">
+                    Drag and drop images here, or click to browse
+                  </p>
+                  <Button variant="outline">
+                    Choose Images
+                  </Button>
+                </div>
+
+                {/* Selected Files */}
+                {galleryModalData.selectedFiles.length > 0 && (
+                  <div className="space-y-3">
+                    <h3 className="font-medium text-glass">Selected Images ({galleryModalData.selectedFiles.length})</h3>
+                    {galleryModalData.selectedFiles.map((file: File, index: number) => {
+                      const fileId = `${Date.now()}-${index}`;
+                      const progress = galleryModalData.uploadProgress[fileId] || 0;
+                      const isUploading = galleryModalData.uploading && progress < 100;
+                      
+                      return (
+                        <div key={index} className="flex items-center justify-between p-3 glass rounded-lg">
+                          <div className="flex items-center gap-3 flex-1">
+                            <ImageIcon size={20} className="text-glass-muted" />
+                            <div className="flex-1">
+                              <p className="font-medium text-glass">{file.name}</p>
+                              <p className="text-sm text-glass-muted">
+                                {(file.size / 1024 / 1024).toFixed(2)} MB
+                              </p>
+                              {isUploading && (
+                                <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                                  <div 
+                                    className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                                    style={{ width: `${progress}%` }}
+                                  ></div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          {!isUploading && (
+                            <button
+                              onClick={() => galleryModalData.removeFile(index)}
+                              className="p-1 hover:bg-red-100 hover:bg-opacity-20 rounded transition-colors"
+                            >
+                              <X size={16} className="text-red-600" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="flex gap-4">
+                  <Button
+                    onClick={() => {
+                      galleryModalData.setShowUploadModal(false);
+                      galleryModalData.setSelectedFiles([]);
+                      galleryModalData.setUploadProgress({});
+                    }}
+                    variant="outline"
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={galleryModalData.handleUpload}
+                    loading={galleryModalData.uploading}
+                    disabled={galleryModalData.selectedFiles.length === 0 || galleryModalData.uploading}
+                    className="flex-1"
+                  >
+                    {galleryModalData.uploading ? 'Uploading...' : 'Upload Images'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>
