@@ -987,7 +987,7 @@ export const AddProperty: React.FC = () => {
                   <div className="border-t border-white border-opacity-20 pt-2 mt-2">
                     <div className="flex justify-between font-medium">
                       <span className="text-glass">Total Monthly Collection:</span>
-                      <span className="text-glass">₹{(form.rent + form.maintenanceCharges).toLocaleString()}</span>
+                      <span className="text-glass">₹{(Number(form.rent) + Number(form.maintenanceCharges)).toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
