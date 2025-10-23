@@ -14,6 +14,7 @@ import {
   Download, 
   Eye, 
   AlertTriangle,
+  AlertCircle,
   Folder,
   Image,
   FileSpreadsheet,
@@ -31,7 +32,8 @@ import { fetchUserDocuments, uploadDocument, softDeleteDocument } from '../../ut
 import { supabase } from '../../lib/supabase';
 import { getRelativeTime } from '../../utils/timezoneUtils';
 import { formatFileSize } from '../../utils/propertyImages';
-import { getUserSubscription, type UserSubscription } from '../../utils/settingsUtils';
+import { enhanceDocumentsWithLeaseStatus, DocumentWithLeaseStatus } from '../../utils/documentLeaseStatus';
+import { getLeaseStatusColor, getLeaseStatusIcon } from '../../utils/leaseStatus';
 
 interface Document {
   id: string;
@@ -43,6 +45,7 @@ interface Document {
   uploadDate: string;
   url: string;
   thumbnail: string;
+  property_id?: string;
 }
 
 
@@ -70,7 +73,7 @@ const docTypes = [
 ];
 
 export const DocumentVault: React.FC = () => {
-  const [documents, setDocuments] = useState<Document[]>([]);
+  const [documents, setDocuments] = useState<DocumentWithLeaseStatus[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [filterCategory, setFilterCategory] = useState<string>('all');
@@ -88,7 +91,6 @@ export const DocumentVault: React.FC = () => {
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
 
   const handleLogout = async () => {
     await logout();
@@ -109,13 +111,6 @@ export const DocumentVault: React.FC = () => {
         console.log('Starting data fetch...');
         setLoading(true);
         
-        // Fetch user subscription plan for storage limit display
-        try {
-          const subscription = await getUserSubscription(user.id);
-          setUserSubscription(subscription);
-        } catch (e) {
-          console.warn('Failed to fetch user subscription for DocumentVault:', e);
-        }
 
         // Fetch documents
         console.log('Fetching user documents...');
@@ -149,11 +144,15 @@ export const DocumentVault: React.FC = () => {
           size: doc.file_size ? formatFileSize(doc.file_size) : 'Unknown',
           uploadDate: doc.uploaded_at || '',
           url: doc.url,
-          thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400'
+          thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
+          property_id: doc.property_id // Preserve property_id for lease status calculation
         }));
 
         console.log('Transformed documents:', transformedDocuments);
-        setDocuments(transformedDocuments);
+        
+        // Enhance documents with lease status
+        const documentsWithLeaseStatus = await enhanceDocumentsWithLeaseStatus(transformedDocuments);
+        setDocuments(documentsWithLeaseStatus);
         setProperties(propertiesData || []);
         
       } catch (error) {
@@ -228,10 +227,13 @@ export const DocumentVault: React.FC = () => {
         size: doc.file_size ? formatFileSize(doc.file_size) : 'Unknown',
         uploadDate: doc.uploaded_at || '',
         url: doc.url || '',
-        thumbnail: '/api/placeholder/150/150'
+        thumbnail: '/api/placeholder/150/150',
+        property_id: doc.property_id // Preserve property_id for lease status calculation
       }));
 
-      setDocuments(formattedDocuments);
+      // Enhance documents with lease status
+      const documentsWithLeaseStatus = await enhanceDocumentsWithLeaseStatus(formattedDocuments);
+      setDocuments(documentsWithLeaseStatus);
       alert('Document deleted successfully!');
     } catch (error) {
       console.error('Error deleting document:', error);
@@ -296,11 +298,15 @@ export const DocumentVault: React.FC = () => {
         size: doc.file_size ? formatFileSize(doc.file_size) : 'Unknown',
         uploadDate: doc.uploaded_at || '',
         url: doc.url,
-        thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400'
+        thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
+        property_id: doc.property_id // Preserve property_id for lease status calculation
       }));
 
       console.log('Setting documents state:', transformedDocuments);
-      setDocuments(transformedDocuments);
+      
+      // Enhance documents with lease status
+      const documentsWithLeaseStatus = await enhanceDocumentsWithLeaseStatus(transformedDocuments);
+      setDocuments(documentsWithLeaseStatus);
       setUploadFiles([]);
       setShowUploadModal(false);
       alert(`${uploadFiles.length} document(s) uploaded successfully!`);
@@ -322,82 +328,21 @@ export const DocumentVault: React.FC = () => {
     return matchesSearch && matchesCategory;
   });
 
-  // Calculate real stats from documents and property images
-  // We need to get the raw file_size from the database for accurate calculation
-  const [totalStorageBytes, setTotalStorageBytes] = useState(0);
-  
-  useEffect(() => {
-    const calculateStorage = async () => {
-      if (!user?.id) return;
-      
-      try {
-        // Get documents storage
-        const { data: documentsData, error: documentsError } = await supabase
-          .from('documents')
-          .select('file_size')
-          .eq('uploaded_by', user.id)
-          .not('name', 'like', '[DELETED]%');
-          
-        if (documentsError) {
-          console.error('Error fetching documents storage:', documentsError);
-          throw documentsError;
-        }
-        
-        // Get user's property IDs first
-        const { data: userProperties, error: propertiesError } = await supabase
-          .from('properties')
-          .select('id')
-          .eq('owner_id', user.id)
-          .eq('active', 'Y');
-          
-        if (propertiesError) {
-          console.error('Error fetching properties:', propertiesError);
-          throw propertiesError;
-        }
-        
-        const propertyIds = userProperties?.map(p => p.id) || [];
-        
-        // Get property images storage using the property IDs
-        let imagesData: Array<{ image_size: number }> = [];
-        if (propertyIds.length > 0) {
-          const { data, error: imagesError } = await supabase
-            .from('property_images')
-            .select('image_size')
-            .in('property_id', propertyIds);
-            
-          if (imagesError) {
-            console.error('Error fetching images storage:', imagesError);
-            throw imagesError;
-          }
-          imagesData = data || [];
-        }
-        
-        // Calculate total storage from both sources
-        const documentsBytes = documentsData?.reduce((sum, doc) => sum + (doc.file_size || 0), 0) || 0;
-        const imagesBytes = imagesData?.reduce((sum, img) => sum + (img.image_size || 0), 0) || 0;
-        const totalBytes = documentsBytes + imagesBytes;
-        
-        console.log('Storage calculation:', {
-          documentsCount: documentsData?.length || 0,
-          documentsBytes,
-          imagesCount: imagesData?.length || 0,
-          imagesBytes,
-          totalBytes
-        });
-        
-        setTotalStorageBytes(totalBytes);
-      } catch (error) {
-        console.error('Error calculating storage:', error);
-      }
-    };
-    
-    calculateStorage();
-  }, [user?.id, documents.length]);
+
+  // Calculate lease-specific stats
+  const leaseDocuments = documents.filter(doc => doc.doc_type === 'lease');
+  const expiringLeaseDocuments = leaseDocuments.filter(doc => 
+    doc.leaseStatus && 
+    (doc.leaseStatus.status === 'expiring_today' || doc.leaseStatus.status === 'expiring_soon')
+  );
+  const expiredLeaseDocuments = leaseDocuments.filter(doc => 
+    doc.leaseStatus && doc.leaseStatus.status === 'expired'
+  );
 
   const stats = {
     totalDocuments: documents.length,
-    expiringDocuments: 0, // We don't have expiry dates in the current schema
-    storageUsed: formatFileSize(totalStorageBytes),
+    expiringDocuments: expiringLeaseDocuments.length,
+    expiredDocuments: expiredLeaseDocuments.length,
     categoriesCount: new Set(documents.map(doc => doc.doc_type)).size
   };
 
@@ -440,7 +385,7 @@ export const DocumentVault: React.FC = () => {
     }
   };
 
-  const DocumentCard: React.FC<{ document: Document }> = ({ document }) => (
+  const DocumentCard: React.FC<{ document: DocumentWithLeaseStatus }> = ({ document }) => (
     <div className="glass-card rounded-xl overflow-hidden hover:scale-105 transition-all duration-300 glow group">
       <div className="relative h-48">
         <img
@@ -448,10 +393,16 @@ export const DocumentVault: React.FC = () => {
           alt={document.name}
           className="w-full h-full object-cover"
         />
-        <div className="absolute top-3 right-3 flex gap-2">
+        <div className="absolute top-3 right-3 flex flex-col gap-2">
           <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
             {document.doc_type || 'Document'}
           </span>
+          {/* Lease Status Alert for Lease Agreements */}
+          {document.doc_type === 'lease' && document.leaseStatus && document.leaseStatus.status !== 'active' && (
+            <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(document.leaseStatus.status)}`}>
+              {getLeaseStatusIcon(document.leaseStatus.status)} {document.leaseStatus.message}
+            </span>
+          )}
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         <div className="absolute bottom-3 left-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -524,7 +475,7 @@ export const DocumentVault: React.FC = () => {
     </div>
   );
 
-  const DocumentListItem: React.FC<{ document: Document }> = ({ document }) => (
+  const DocumentListItem: React.FC<{ document: DocumentWithLeaseStatus }> = ({ document }) => (
     <div className="glass-card rounded-xl p-4 hover:scale-[1.02] transition-all duration-300 glow">
       <div className="flex items-center gap-4">
         <div className="w-16 h-16 glass rounded-lg flex items-center justify-center">
@@ -541,6 +492,15 @@ export const DocumentVault: React.FC = () => {
                 </span>
                 <span className="text-xs text-glass-muted">•</span>
                 <span className="text-sm text-glass-muted">{document.propertyName}</span>
+                {/* Lease Status Alert for Lease Agreements */}
+                {document.doc_type === 'lease' && document.leaseStatus && document.leaseStatus.status !== 'active' && (
+                  <>
+                    <span className="text-xs text-glass-muted">•</span>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(document.leaseStatus.status)}`}>
+                      {getLeaseStatusIcon(document.leaseStatus.status)} {document.leaseStatus.message}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -717,18 +677,12 @@ export const DocumentVault: React.FC = () => {
           <div className="glass-card rounded-xl p-6 glow">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
-                <Folder className="w-6 h-6 text-green-800" />
+                <AlertCircle className="w-6 h-6 text-red-600" />
               </div>
             </div>
-            <h3 className="text-sm font-medium text-glass-muted mb-1">Total Storage Used</h3>
-            <p className="text-3xl font-bold text-glass">{stats.storageUsed}</p>
-          <p className="text-sm text-green-700 mt-2">
-            of {userSubscription?.plan?.storage_limit_mb === -1 
-              ? 'Unlimited' 
-              : userSubscription?.plan?.storage_limit_mb != null 
-                ? formatFileSize(userSubscription.plan.storage_limit_mb * 1024 * 1024)
-                : '—'}
-          </p>
+            <h3 className="text-sm font-medium text-glass-muted mb-1">Lease Expired</h3>
+            <p className="text-3xl font-bold text-red-600">{stats.expiredDocuments}</p>
+            <p className="text-sm text-red-600 mt-2">Action required</p>
           </div>
 
           <div className="glass-card rounded-xl p-6 glow">

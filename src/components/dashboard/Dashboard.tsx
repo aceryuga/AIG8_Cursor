@@ -34,8 +34,11 @@ import {
   Wrench,
   MessageSquare,
   DollarSign,
+  Folder,
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
+import { formatFileSize } from '../../utils/propertyImages';
+import { getUserSubscription, type UserSubscription } from '../../utils/settingsUtils';
 
 // Property interface removed as it's not used in this component
 
@@ -96,6 +99,10 @@ export const Dashboard: React.FC = () => {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
+  
+  // Storage calculation states
+  const [totalStorageBytes, setTotalStorageBytes] = useState(0);
+  const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
 
   // Close dropdowns when clicking outside
   React.useEffect(() => {
@@ -625,6 +632,83 @@ export const Dashboard: React.FC = () => {
     fetchData();
   }, [user?.id]);
 
+  // Storage calculation effect
+  useEffect(() => {
+    const calculateStorage = async () => {
+      if (!user?.id) return;
+      
+      try {
+        // Fetch user subscription plan for storage limit display
+        try {
+          const subscription = await getUserSubscription(user.id);
+          setUserSubscription(subscription);
+        } catch (e) {
+          console.warn('Failed to fetch user subscription for Dashboard:', e);
+        }
+
+        // Get documents storage
+        const { data: documentsData, error: documentsError } = await supabase
+          .from('documents')
+          .select('file_size')
+          .eq('uploaded_by', user.id)
+          .not('name', 'like', '[DELETED]%');
+          
+        if (documentsError) {
+          console.error('Error fetching documents storage:', documentsError);
+          throw documentsError;
+        }
+        
+        // Get user's property IDs first
+        const { data: userProperties, error: propertiesError } = await supabase
+          .from('properties')
+          .select('id')
+          .eq('owner_id', user.id)
+          .eq('active', 'Y');
+          
+        if (propertiesError) {
+          console.error('Error fetching properties:', propertiesError);
+          throw propertiesError;
+        }
+        
+        const propertyIds = userProperties?.map(p => p.id) || [];
+        
+        // Get property images storage using the property IDs
+        let imagesData: Array<{ image_size: number }> = [];
+        if (propertyIds.length > 0) {
+          const { data, error: imagesError } = await supabase
+            .from('property_images')
+            .select('image_size')
+            .in('property_id', propertyIds);
+            
+          if (imagesError) {
+            console.error('Error fetching images storage:', imagesError);
+            throw imagesError;
+          }
+          imagesData = data || [];
+        }
+        
+        // Calculate total storage from both sources
+        const documentsBytes = documentsData?.reduce((sum, doc) => sum + (doc.file_size || 0), 0) || 0;
+        const imagesBytes = imagesData?.reduce((sum, img) => sum + (img.image_size || 0), 0) || 0;
+        const totalBytes = documentsBytes + imagesBytes;
+        
+        console.log('Storage calculation:', {
+          documentsCount: documentsData?.length || 0,
+          documentsBytes,
+          imagesCount: imagesData?.length || 0,
+          imagesBytes,
+          totalBytes
+        });
+        
+        setTotalStorageBytes(totalBytes);
+      } catch (error) {
+        console.error('Error calculating storage:', error);
+      }
+    };
+    
+    calculateStorage();
+  }, [user?.id]);
+
   const handleLogout = async () => {
     await logout();
     window.location.href = '/auth/login';
@@ -942,7 +1026,7 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Portfolio Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6 mb-8">
           <div className="glass-card rounded-xl p-6 glow">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
@@ -997,6 +1081,23 @@ export const Dashboard: React.FC = () => {
             <h3 className="text-sm font-medium text-glass-muted mb-1">Overdue Amount</h3>
             <p className="text-2xl font-bold text-red-600">₹{overdueAmount.toLocaleString()}</p>
             <p className="text-sm text-red-600 mt-2">Past Due</p>
+          </div>
+
+          <div className="glass-card rounded-xl p-6 glow">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
+                <Folder className="w-6 h-6 text-green-800" />
+              </div>
+            </div>
+            <h3 className="text-sm font-medium text-glass-muted mb-1">Total Storage Used</h3>
+            <p className="text-2xl font-bold text-glass">{formatFileSize(totalStorageBytes)}</p>
+            <p className="text-sm text-green-700 mt-2">
+              of {userSubscription?.plan?.storage_limit_mb === -1 
+                ? 'Unlimited' 
+                : userSubscription?.plan?.storage_limit_mb != null 
+                  ? formatFileSize(userSubscription.plan.storage_limit_mb * 1024 * 1024)
+                  : '—'}
+            </p>
           </div>
         </div>
 

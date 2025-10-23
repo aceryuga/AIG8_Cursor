@@ -50,6 +50,8 @@ interface SupabaseProperty {
     is_primary: boolean;
   }[];
   leases?: {
+    id: string;
+    tenant_id: string;
     monthly_rent: number;
     security_deposit: number;
     maintenance_charges: number;
@@ -103,6 +105,7 @@ export const PropertiesList: React.FC = () => {
             *,
             leases(
               id,
+              tenant_id,
               monthly_rent,
               security_deposit,
               maintenance_charges,
@@ -852,10 +855,7 @@ export const PropertiesList: React.FC = () => {
           onClose={handleCloseMessageModal}
           propertyId={selectedProperty.id}
           propertyName={selectedProperty.name}
-          tenantId={supabaseProperties.find(p => p.id === selectedProperty.id)?.leases?.[0]?.tenants ? 
-            (supabaseProperties.find(p => p.id === selectedProperty.id)?.leases?.[0] as any)?.tenant_id : 
-            undefined
-          }
+          tenantId={supabaseProperties.find(p => p.id === selectedProperty.id)?.leases?.[0]?.tenant_id}
           tenantName={selectedProperty.tenant}
           tenantEmail={selectedProperty.tenantEmail}
         />

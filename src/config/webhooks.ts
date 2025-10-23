@@ -12,7 +12,7 @@ export const WEBHOOKS = {
    * 
    * To update: Change the URL below and redeploy the application
    */
-  MESSAGING_WEBHOOK: 'https://n8n.usatinc.com/webhook-test/887b233d-6cd6-40a2-af7e-2d9edd58d570',
+  MESSAGING_WEBHOOK: 'https://primary-production-e3df.up.railway.app/webhook/887b233d-6cd6-40a2-af7e-2d9edd58d570',
   
   // Add more webhooks here as needed
   // PAYMENT_WEBHOOK: 'https://...',
