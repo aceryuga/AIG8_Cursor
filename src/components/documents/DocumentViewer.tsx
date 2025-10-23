@@ -5,7 +5,6 @@ import { Button } from '../webapp-ui/Button';
 import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
 import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
-import { supabase } from '../../lib/supabase';
 
 interface Document {
   id: string;
@@ -160,6 +159,7 @@ export const DocumentViewer: React.FC = () => {
 
   const handleDownload = () => {
     // Simulate download
+    if (!currentDocument) return;
     const link = document.createElement('a');
     link.href = currentDocument.thumbnail;
     link.download = currentDocument.name;
