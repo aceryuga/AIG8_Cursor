@@ -45,13 +45,22 @@ interface SupabaseProperty {
   address: string;
   status: string;
   images: string;
+  created_at?: string;
+  property_images?: {
+    id: string;
+    image_url: string;
+    is_primary: boolean;
+  }[];
   leases?: {
+    id: string;
     monthly_rent: number;
     security_deposit: number;
     maintenance_charges: number;
     start_date: string;
     end_date: string;
     is_active: boolean;
+    created_at?: string;
+    updated_at?: string;
     tenants?: {
       name: string;
       phone: string;
@@ -62,7 +71,7 @@ interface SupabaseProperty {
 
 interface Activity {
   id: string;
-  type: 'payment' | 'lease' | 'maintenance' | 'document';
+  type: 'payment' | 'lease' | 'maintenance' | 'document' | 'gallery' | 'communication' | 'rental';
   message: string;
   time: string;
   timestamp: number; // Add timestamp for proper sorting
@@ -192,7 +201,18 @@ export const Dashboard: React.FC = () => {
           `)
           .eq('properties.owner_id', user.id)
           .order('uploaded_at', { ascending: false })
-          .limit(10);
+          .limit(10) as { data: Array<{
+            id: string;
+            name: string;
+            doc_type: string;
+            uploaded_at: string;
+            property_id: string;
+            properties: {
+              id: string;
+              name: string;
+              owner_id: string;
+            };
+          }> | null; error: any };
 
         if (documentsError) {
           console.warn('Error fetching documents:', documentsError);
@@ -213,7 +233,16 @@ export const Dashboard: React.FC = () => {
           `)
           .eq('properties.owner_id', user.id)
           .order('created_at', { ascending: false })
-          .limit(10);
+          .limit(10) as { data: Array<{
+            id: string;
+            image_name: string;
+            created_at: string;
+            properties: {
+              id: string;
+              name: string;
+              owner_id: string;
+            };
+          }> | null; error: any };
 
         if (propertyImagesError) {
           console.warn('Error fetching property images:', propertyImagesError);
@@ -238,14 +267,40 @@ export const Dashboard: React.FC = () => {
           `)
           .eq('properties.owner_id', user.id)
           .order('created_at', { ascending: false })
-          .limit(10);
+          .limit(10) as { data: Array<{
+            id: string;
+            description: string;
+            status: string;
+            created_at: string;
+            properties: {
+              id: string;
+              name: string;
+              owner_id: string;
+            };
+            tenants: {
+              name: string;
+            } | null;
+          }> | null; error: any };
 
         if (maintenanceError) {
           console.warn('Error fetching maintenance requests:', maintenanceError);
         }
 
         // Fetch recent communication logs
-        let communicationData = null;
+        let communicationData: Array<{
+          id: string;
+          mode: string;
+          message: string;
+          sent_at: string;
+          properties: {
+            id: string;
+            name: string;
+            owner_id: string;
+          };
+          tenants: {
+            name: string;
+          } | null;
+        }> | null = null;
         try {
           const { data, error: communicationError } = await supabase
             .from('communication_log')
@@ -265,7 +320,20 @@ export const Dashboard: React.FC = () => {
             `)
             .eq('properties.owner_id', user.id)
             .order('sent_at', { ascending: false })
-            .limit(10);
+            .limit(10) as { data: Array<{
+              id: string;
+              mode: string;
+              message: string;
+              sent_at: string;
+              properties: {
+                id: string;
+                name: string;
+                owner_id: string;
+              };
+              tenants: {
+                name: string;
+              } | null;
+            }> | null; error: any };
 
           if (communicationError) {
             console.warn('Error fetching communication logs:', communicationError);
@@ -299,7 +367,24 @@ export const Dashboard: React.FC = () => {
           `)
           .eq('leases.properties.owner_id', user.id)
           .order('created_at', { ascending: false })
-          .limit(10);
+          .limit(10) as { data: Array<{
+            id: string;
+            old_rent: number;
+            new_rent: number;
+            effective_date: string;
+            created_at: string;
+            leases: {
+              id: string;
+              properties: {
+                id: string;
+                name: string;
+                owner_id: string;
+              };
+              tenants: {
+                name: string;
+              } | null;
+            };
+          }> | null; error: any };
 
         if (rentalIncreasesError) {
           console.warn('Error fetching rental increases:', rentalIncreasesError);
@@ -574,6 +659,16 @@ export const Dashboard: React.FC = () => {
     return rentStatus.status;
   };
 
+  // Convert payments to rent payment format first (needed for calculations below)
+  const rentPayments: RentPayment[] = payments.map(payment => ({
+    id: payment.id,
+    lease_id: (payment.leases as any)?.id || '',
+    payment_date: payment.payment_date,
+    payment_amount: payment.payment_amount,
+    status: payment.status as 'completed' | 'pending' | 'failed',
+    payment_type: payment.payment_type
+  }));
+
   // Use real data from Supabase only (no mock fallback)
   const properties = supabaseProperties.map(prop => {
     const activeLease = prop.leases && prop.leases.length > 0 ?
@@ -584,6 +679,20 @@ export const Dashboard: React.FC = () => {
     const leaseStatus = activeLease?.end_date ? 
       calculateLeaseStatus(activeLease.end_date) : 
       { status: 'active', message: 'No Lease', daysRemaining: 0, priority: 1 };
+
+    // Calculate rent status and amount for due/overdue display
+    let rentAmount = 0;
+    if (activeLease) {
+      const propertyWithLease: PropertyWithLease = {
+        id: prop.id,
+        lease_id: (activeLease as any).id,
+        monthly_rent: activeLease.monthly_rent,
+        start_date: activeLease.start_date,
+        is_active: activeLease.is_active
+      };
+      const rentStatus = calculateRentStatus(propertyWithLease, rentPayments);
+      rentAmount = rentStatus.amount;
+    }
 
     return {
       id: prop.id,
@@ -599,7 +708,8 @@ export const Dashboard: React.FC = () => {
         prop.property_images[0]?.image_url || 
         '/placeholder-property.jpg' : '/placeholder-property.jpg',
       dueDate: activeLease?.end_date || 'No lease',
-      leases: prop.leases // Keep leases data for overdue calculation
+      leases: prop.leases, // Keep leases data for overdue calculation
+      dueAmount: rentAmount // Add the calculated amount
     };
   });
 
@@ -623,15 +733,6 @@ export const Dashboard: React.FC = () => {
       is_active: activeLease.is_active
     };
   }).filter(Boolean) as PropertyWithLease[];
-
-  const rentPayments: RentPayment[] = payments.map(payment => ({
-    id: payment.id,
-    lease_id: (payment.leases as any)?.id || '',
-    payment_date: payment.payment_date,
-    payment_amount: payment.payment_amount,
-    status: payment.status as 'completed' | 'pending' | 'failed',
-    payment_type: payment.payment_type
-  }));
 
 
   // Calculate amounts for overdue and pending properties
@@ -950,6 +1051,11 @@ export const Dashboard: React.FC = () => {
                             {property.paymentStatus}
                           </span>
                         </div>
+                        {(property.paymentStatus === 'pending' || property.paymentStatus === 'overdue') && property.dueAmount > 0 && (
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                            ₹{property.dueAmount.toLocaleString()}
+                          </span>
+                        )}
                         {property.leaseStatus && property.leaseStatus.status !== 'active' && (
                           <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
                             {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}

@@ -21,8 +21,8 @@ import {
   Shield,
   Zap
 } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Input } from '../ui/Input';
+import { Button } from '../webapp-ui/Button';
+import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
 import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 
@@ -461,7 +461,7 @@ export const OnboardingWizard: React.FC = () => {
                       <div className="border-t border-white border-opacity-20 pt-2 mt-2">
                         <div className="flex justify-between font-medium">
                           <span className="text-glass">Total Monthly:</span>
-                          <span className="text-glass">₹{(data.monthlyRent + data.maintenanceCharges).toLocaleString()}</span>
+                          <span className="text-glass">₹{(Number(data.monthlyRent) + Number(data.maintenanceCharges)).toLocaleString()}</span>
                         </div>
                       </div>
                     </div>

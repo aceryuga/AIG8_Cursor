@@ -1,5 +1,4 @@
 import React from 'react';
-import { NotificationBell } from '../ui/NotificationBell';
 
 interface GlobalLayoutProps {
   children: React.ReactNode;

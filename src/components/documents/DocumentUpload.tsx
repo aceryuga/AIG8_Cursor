@@ -4,7 +4,6 @@ import {
   ArrowLeft, 
   Building2, 
   LogOut, 
-  Bell, 
   HelpCircle, 
   User, 
   Upload, 
@@ -16,18 +15,14 @@ import {
   CheckCircle, 
   AlertTriangle, 
   Calendar, 
-  Tag, 
-  Home, 
-  Eye, 
-  Trash2,
+  Eye,
   Plus,
   Zap
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
-import { Input } from '../webapp-ui/Input';
 import { NotificationBell } from '../ui/NotificationBell';
 import { useAuth } from '../../hooks/useAuth';
-import { uploadDocument, fetchUserDocuments, DocumentMetadata } from '../../utils/documentUpload';
+import { uploadDocument } from '../../utils/documentUpload';
 import { supabase } from '../../lib/supabase';
 
 interface UploadFile {
@@ -43,6 +38,8 @@ interface UploadFile {
   leaseId: string;
   tenantId: string;
   ocrText?: string;
+  expiryDate?: string;
+  description?: string;
 }
 
 interface Property {
@@ -67,7 +64,6 @@ export const DocumentUpload: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadComplete, setUploadComplete] = useState(false);
   const [properties, setProperties] = useState<Property[]>([]);
-  const [loading, setLoading] = useState(true);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -81,7 +77,6 @@ export const DocumentUpload: React.FC = () => {
   useEffect(() => {
     const fetchProperties = async () => {
       if (!user?.id) {
-        setLoading(false);
         return;
       }
 
@@ -100,8 +95,6 @@ export const DocumentUpload: React.FC = () => {
         }
       } catch (err) {
         console.error('Error fetching properties:', err);
-      } finally {
-        setLoading(false);
       }
     };
 

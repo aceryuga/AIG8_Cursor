@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { 
   Building2, 
   LogOut, 
-  Bell, 
   HelpCircle, 
   User, 
   Plus, 
@@ -359,7 +358,7 @@ export const DocumentVault: React.FC = () => {
         const propertyIds = userProperties?.map(p => p.id) || [];
         
         // Get property images storage using the property IDs
-        let imagesData = [];
+        let imagesData: Array<{ image_size: number }> = [];
         if (propertyIds.length > 0) {
           const { data, error: imagesError } = await supabase
             .from('property_images')

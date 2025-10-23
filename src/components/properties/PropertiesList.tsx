@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Phone, Mail, Building2, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2, AlertCircle, X } from 'lucide-react';
+import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Mail, Building2, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2, AlertCircle, X } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { useAuth } from '../../hooks/useAuth';
@@ -30,6 +30,7 @@ interface Property {
   propertyType: 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa';
   bedrooms?: number;
   area: number;
+  dueAmount?: number;
 }
 
 interface SupabaseProperty {
@@ -43,6 +44,11 @@ interface SupabaseProperty {
   images: string;
   description: string;
   amenities: string;
+  property_images?: {
+    id: string;
+    image_url: string;
+    is_primary: boolean;
+  }[];
   leases?: {
     monthly_rent: number;
     security_deposit: number;
@@ -67,8 +73,8 @@ export const PropertiesList: React.FC = () => {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState<string>('all');
   const [sortBy, setSortBy] = useState<string>('name');
-  const [showFilters, setShowFilters] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [messageModalOpen, setMessageModalOpen] = useState(false);
@@ -132,7 +138,8 @@ export const PropertiesList: React.FC = () => {
           lease_id: (payment.leases as any)?.id || '',
           payment_date: payment.payment_date,
           payment_amount: payment.payment_amount,
-          status: payment.status as 'completed' | 'pending' | 'failed'
+          status: payment.status as 'completed' | 'pending' | 'failed',
+          payment_type: payment.payment_type
         }));
         setPayments(rentPayments);
       } catch (err: any) {
@@ -158,6 +165,7 @@ export const PropertiesList: React.FC = () => {
         
         // Calculate rent status using new system - only for occupied properties
         let paymentStatus: 'paid' | 'pending' | 'overdue' | null = null;
+        let dueAmount = 0;
         if (activeLease && prop.status === 'occupied') {
           const propertyWithLease: PropertyWithLease = {
             id: prop.id,
@@ -169,6 +177,7 @@ export const PropertiesList: React.FC = () => {
           
           const rentStatus = calculateRentStatus(propertyWithLease, payments);
           paymentStatus = rentStatus.status;
+          dueAmount = rentStatus.amount;
           
         }
         
@@ -195,7 +204,8 @@ export const PropertiesList: React.FC = () => {
           dueDate: activeLease?.end_date || 'No lease',
           propertyType: (prop.property_type as 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa') || 'apartment',
           bedrooms: prop.bedrooms || 1,
-          area: prop.area || 0
+          area: prop.area || 0,
+          dueAmount
         };
       });
       setProperties(convertedProperties);
@@ -344,8 +354,9 @@ export const PropertiesList: React.FC = () => {
     
     const matchesStatus = filterStatus === 'all' || property.status === filterStatus;
     const matchesType = filterType === 'all' || property.propertyType === filterType;
+    const matchesPaymentStatus = filterPaymentStatus === 'all' || property.paymentStatus === filterPaymentStatus;
     
-    return matchesSearch && matchesStatus && matchesType;
+    return matchesSearch && matchesStatus && matchesType && matchesPaymentStatus;
   });
 
   const sortedProperties = [...filteredProperties].sort((a, b) => {
@@ -398,6 +409,11 @@ export const PropertiesList: React.FC = () => {
               </span>
             )}
           </div>
+          {property.paymentStatus && (property.paymentStatus === 'pending' || property.paymentStatus === 'overdue') && property.dueAmount && property.dueAmount > 0 && (
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+              ₹{property.dueAmount.toLocaleString()}
+            </span>
+          )}
           {property.leaseStatus && property.leaseStatus.status !== 'active' && (
             <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
               {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}
@@ -502,6 +518,11 @@ export const PropertiesList: React.FC = () => {
                   </span>
                 )}
               </div>
+              {property.paymentStatus && (property.paymentStatus === 'pending' || property.paymentStatus === 'overdue') && property.dueAmount && property.dueAmount > 0 && (
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                  ₹{property.dueAmount.toLocaleString()}
+                </span>
+              )}
               {property.leaseStatus && property.leaseStatus.status !== 'active' && (
                 <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
                   {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}
@@ -678,15 +699,6 @@ export const PropertiesList: React.FC = () => {
               </Button>
             </div>
 
-            {/* Filters Toggle */}
-            <Button
-              variant="outline"
-              onClick={() => setShowFilters(!showFilters)}
-              className="flex items-center gap-2 h-12"
-            >
-              <SlidersHorizontal size={16} />
-              Filters
-            </Button>
 
             {/* Sort */}
             <div className="flex items-center gap-2 h-12">
@@ -703,21 +715,19 @@ export const PropertiesList: React.FC = () => {
             </div>
           </div>
 
-          {/* Expanded Filters */}
-          {showFilters && (
-            <div className="mt-6 pt-6 border-t border-white border-opacity-20">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Filters */}
+          <div className="mt-6 pt-6 border-t border-white border-opacity-20">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-glass mb-2">Status</label>
+                  <label className="block text-sm font-medium text-glass mb-2">Occupancy</label>
                   <select
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
                     className="w-full glass-input rounded-lg px-3 py-2 text-glass"
                   >
-                    <option value="all">All Status</option>
+                    <option value="all">All</option>
                     <option value="occupied">Occupied</option>
                     <option value="vacant">Vacant</option>
-                    <option value="maintenance">Maintenance</option>
                   </select>
                 </div>
                 
@@ -743,22 +753,37 @@ export const PropertiesList: React.FC = () => {
                   </select>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-glass mb-2">Payment Status</label>
+                  <select
+                    value={filterPaymentStatus}
+                    onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                    className="w-full glass-input rounded-lg px-3 py-2 text-glass"
+                  >
+                    <option value="all">All Payments</option>
+                    <option value="paid">Paid</option>
+                    <option value="pending">Pending</option>
+                    <option value="overdue">Overdue</option>
+                  </select>
+                </div>
+
                 <div className="flex items-end">
-                  <Button
-                    variant="outline"
+                  <button
                     onClick={() => {
                       setFilterStatus('all');
                       setFilterType('all');
+                      setFilterPaymentStatus('all');
                       setSearchTerm('');
                     }}
-                    className="w-full"
+                    className="w-full h-10 glass-input rounded-lg flex items-center justify-center hover:bg-white hover:bg-opacity-10 transition-colors"
+                    title="Clear All Filters"
                   >
-                    Clear Filters
-                  </Button>
+                    <SlidersHorizontal size={16} className="text-glass-muted" />
+                    <X size={12} className="text-glass-muted ml-1" />
+                  </button>
                 </div>
               </div>
             </div>
-          )}
         </div>
 
         {/* Results Summary */}
@@ -808,7 +833,7 @@ export const PropertiesList: React.FC = () => {
             </div>
             <h3 className="text-lg font-semibold text-glass mb-2">No properties found</h3>
             <p className="text-glass-muted mb-4">
-              {searchTerm || filterStatus !== 'all' || filterType !== 'all'
+              {searchTerm || filterStatus !== 'all' || filterType !== 'all' || filterPaymentStatus !== 'all'
                 ? 'Try adjusting your search or filters'
                 : 'Get started by adding your first property'
               }

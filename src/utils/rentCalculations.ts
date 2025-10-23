@@ -54,7 +54,7 @@ export const calculateRentStatus = (
   const overdueDate = new Date(currentYear, currentMonth, 6); // 6th of current month
   
   // Calculate total payments received for this lease in current month
-  // Exclude security deposits as they don't reduce rent overdue amount
+  // Exclude security deposits and maintenance charges as they don't reduce rent overdue amount
   const totalPaymentsReceived = payments
     .filter(payment => {
       const paymentDate = new Date(payment.payment_date);
@@ -63,7 +63,8 @@ export const calculateRentStatus = (
       const isCorrectLease = payment.lease_id === property.lease_id;
       const isCompleted = payment.status === 'completed';
       const isNotSecurityDeposit = payment.payment_type !== 'Security Deposit';
-      return isCorrectMonth && isCorrectLease && isCompleted && isNotSecurityDeposit;
+      const isNotMaintenance = payment.payment_type !== 'Maintenance';
+      return isCorrectMonth && isCorrectLease && isCompleted && isNotSecurityDeposit && isNotMaintenance;
     })
     .reduce((sum, payment) => sum + payment.payment_amount, 0);
   

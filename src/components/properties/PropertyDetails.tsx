@@ -132,6 +132,7 @@ export const PropertyDetails: React.FC = () => {
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
   const [rentPayments, setRentPayments] = useState<RentPayment[]>([]);
   const [leaseId, setLeaseId] = useState<string>('');
+  const [dueAmount, setDueAmount] = useState<number>(0);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [maintenanceRequests, setMaintenanceRequests] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -251,7 +252,8 @@ export const PropertyDetails: React.FC = () => {
         lease_id: (payment.leases as any)?.id || '',
         payment_date: payment.payment_date,
         payment_amount: payment.payment_amount,
-        status: payment.status as 'completed' | 'pending' | 'failed'
+        status: payment.status as 'completed' | 'pending' | 'failed',
+        payment_type: payment.payment_type
       }));
       
       setRentPayments(rentPaymentsData);
@@ -370,7 +372,8 @@ export const PropertyDetails: React.FC = () => {
           lease_id: (payment.leases as any)?.id || '',
           payment_date: payment.payment_date,
           payment_amount: payment.payment_amount,
-          status: payment.status as 'completed' | 'pending' | 'failed'
+          status: payment.status as 'completed' | 'pending' | 'failed',
+          payment_type: payment.payment_type
         }));
         
         setRentPayments(rentPaymentsData);
@@ -442,6 +445,9 @@ export const PropertyDetails: React.FC = () => {
 
       const rentStatus = calculateRentStatus(propertyWithLease, rentPayments);
       
+      // Update the due amount
+      setDueAmount(rentStatus.amount);
+      
       // Only update if the payment status has actually changed
       if (property.paymentStatus !== rentStatus.status) {
         setProperty(prev => prev ? {
@@ -449,6 +455,9 @@ export const PropertyDetails: React.FC = () => {
           paymentStatus: rentStatus.status
         } : null);
       }
+    } else {
+      // Reset due amount if property is vacant or no lease
+      setDueAmount(0);
     }
   }, [leaseId, rentPayments, property?.id, property?.rent, property?.leaseStart, property?.status]);
 
@@ -1396,6 +1405,11 @@ export const PropertyDetails: React.FC = () => {
                         {currentProperty.paymentStatus}
                       </span>
                     </div>
+                    {(currentProperty.paymentStatus === 'pending' || currentProperty.paymentStatus === 'overdue') && dueAmount > 0 && (
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusColor(currentProperty.paymentStatus)}`}>
+                        ₹{dueAmount.toLocaleString()}
+                      </span>
+                    )}
                     {currentProperty.leaseStatus && currentProperty.leaseStatus.status !== 'active' && (
                       <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getLeaseStatusColor(currentProperty.leaseStatus.status)}`}>
                         {getLeaseStatusIcon(currentProperty.leaseStatus.status)} {currentProperty.leaseStatus.message}
