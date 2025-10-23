@@ -11,9 +11,26 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     
-    <!-- Chatbase Widget -->
-    <script>
-    (function(){if(!window.chatbase||window.chatbase("getState")!=="initialized"){window.chatbase=(...arguments)=>{if(!window.chatbase.q){window.chatbase.q=[]}window.chatbase.q.push(arguments)};window.chatbase=new Proxy(window.chatbase,{get(target,prop){if(prop==="q"){return target.q}return(...args)=>target(prop,...args)}})}const onLoad=function(){const script=document.createElement("script");script.src="https://www.chatbase.co/embed.min.js";script.id="BTmUqgGEfZxm7fnz-7i69";script.domain="www.chatbase.co";document.body.appendChild(script)};if(document.readyState==="complete"){onLoad()}else{window.addEventListener("load",onLoad)}})();
+    <!-- n8n Chat Widget -->
+    <link href="https://cdn.jsdelivr.net/npm/@n8n/chat/dist/style.css" rel="stylesheet" />
+
+    <script type="module">
+      import { createChat } from 'https://cdn.jsdelivr.net/npm/@n8n/chat/dist/chat.bundle.es.js';
+      
+      createChat({
+        webhookUrl: 'http://localhost:5678/webhook/1a32a12f-26bb-4732-ba1f-f6a9c7e7d9f4/chat',
+        initialMessages: [
+          'Hi there!',
+          'How can I help you today?'
+        ],
+        i18n: {
+          en: {
+            title: 'PropertyPro Assistant 🏠',
+            subtitle: 'We are here to help with your property management!',
+            inputPlaceholder: 'Type your question...',
+          },
+        },
+      });
     </script>
   </body>
 </html>
