@@ -34,6 +34,7 @@ import { validateEmail, validatePhone, validatePassword } from '../../utils/vali
 import { sanitizeText, sanitizeEmail, sanitizePhone } from '../../utils/security';
 import { ErrorAuditTest } from '../test/ErrorAuditTest';
 import { canAccessTesting } from '../../utils/adminUtils';
+import { TelegramLinking } from './TelegramLinking';
 import { purgeUserData } from '../../utils/accountDeletion';
 import { 
   getUserSettings, 
@@ -171,7 +172,7 @@ export const SettingsPage: React.FC = () => {
         const settingsData = settings.status === 'fulfilled' ? settings.value : null;
         const plansData = plans.status === 'fulfilled' ? plans.value : [];
         const subscriptionData = subscription.status === 'fulfilled' ? subscription.value : null;
-        const billingData = billing.status === 'fulfilled' ? billing.value : [];
+        // billingData not used in MVP - billing history UI is disabled
         // Login activity removed
 
         // Log any errors for debugging
@@ -759,6 +760,11 @@ export const SettingsPage: React.FC = () => {
                     </Button>
                   </div>
                 </form>
+
+                {/* Telegram Integration */}
+                <div className="mt-6">
+                  <TelegramLinking />
+                </div>
 
                 {/* Delete Account Section */}
                 <div className="glass-card rounded-xl p-6 border-l-4 border-red-500 mt-6">

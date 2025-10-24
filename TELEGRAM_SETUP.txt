@@ -1,0 +1,67 @@
+TELEGRAM INTEGRATION - SETUP CHECKLIST
+=====================================
+
+✅ COMPLETED:
+-------------
+1. Database table 'telegram_users' exists and configured
+2. RLS policies configured (SELECT, UPDATE, INSERT, DELETE)
+3. TelegramLinking component integrated in SettingsPage
+4. Design matches webapp style (glass-card, text-glass, etc.)
+5. Auto-polling for link status (checks every 5 seconds)
+6. Secure token generation using crypto API
+7. Database schema fixed (telegram_id now nullable)
+
+🔧 REQUIRED ACTION:
+------------------
+Update the Telegram bot username in:
+File: src/components/settings/TelegramLinking.tsx
+Line: 7
+
+Change this line:
+const TELEGRAM_BOT_USERNAME = '@YourPropertyProBot';
+
+To your actual bot username:
+const TELEGRAM_BOT_USERNAME = '@YourActualBotName';
+
+💡 HOW IT WORKS:
+---------------
+1. User clicks "Generate Link Code"
+2. System creates 8-character secure token (valid 10 minutes)
+3. User opens Telegram bot and sends /start
+4. User sends the token to bot
+5. Bot verifies token and links accounts
+6. Component auto-detects link (polls every 5 seconds)
+7. Success! User sees linked account info
+
+🎨 DESIGN FEATURES:
+------------------
+- Matches webapp glass morphism design
+- Green accent color (#10b981 / green-800)
+- Loading states and animations
+- Error handling with AlertTriangle icon
+- Copy-to-clipboard functionality
+- Auto-refresh on link confirmation
+- Responsive layout
+
+📋 DATABASE SCHEMA:
+------------------
+Table: public.telegram_users
+- id (uuid, primary key)
+- user_id (uuid, references users.id)
+- telegram_id (bigint, nullable until linked)
+- telegram_username (text, optional)
+- telegram_first_name (text)
+- link_token (text, unique, expires in 10 min)
+- link_token_expires_at (timestamptz)
+- linked_at (timestamptz)
+- is_active (boolean)
+- created_at, updated_at (timestamptz)
+
+🔒 SECURITY:
+-----------
+- Row Level Security (RLS) enabled
+- Users can only access their own links
+- Tokens expire after 10 minutes
+- Secure token generation (crypto API)
+- Auth validation on all operations
+
