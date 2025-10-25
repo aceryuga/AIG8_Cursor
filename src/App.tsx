@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Header } from './components/ui/header';
 import { NavBar } from './components/ui/tubelight-navbar';
@@ -42,6 +42,13 @@ import AIChatbot from './components/ui/AIChatbot';
 const LandingPage = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  
+  // Redirect authenticated users to Dashboard
+  React.useEffect(() => {
+    if (user) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [user, navigate]);
   const scrollToSection = (sectionId: string) => {
     const element = document.getElementById(sectionId);
     if (element) {

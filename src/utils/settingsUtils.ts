@@ -313,6 +313,7 @@ export const updateUserProfile = async (userId: string, updates: {
   profile_image_url?: string;
 }): Promise<any> => {
   try {
+    // Update the custom users table
     const { data, error } = await supabase
       .from('users')
       .update(updates)
@@ -321,6 +322,23 @@ export const updateUserProfile = async (userId: string, updates: {
       .single();
 
     if (error) throw error;
+
+    // Also update Supabase auth metadata to keep them in sync
+    if (updates.name || updates.phone) {
+      const authUpdates: any = {};
+      if (updates.name) authUpdates.full_name = updates.name;
+      if (updates.phone) authUpdates.phone = updates.phone;
+      
+      const { error: authError } = await supabase.auth.updateUser({
+        data: authUpdates
+      });
+      
+      if (authError) {
+        console.warn('Failed to update auth metadata:', authError);
+        // Don't throw error as the main update succeeded
+      }
+    }
+
     return data;
   } catch (error) {
     console.error('Error updating user profile:', error);

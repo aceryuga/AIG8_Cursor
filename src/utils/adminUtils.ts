@@ -7,7 +7,9 @@ const ADMIN_EMAILS = [
   'admin@propertypro.com',
   'rajesh.kumar@example.com', // Demo user for testing
   'dev@propertypro.com',
-  'support@propertypro.com'
+  'support@propertypro.com',
+  'mayank@propertypro.com', // Add current user as admin for testing
+  'mayankshah@propertypro.com' // Alternative admin email
 ];
 
 /**
@@ -29,8 +31,12 @@ export const isDevelopment = (): boolean => {
  * Check if testing features should be available
  */
 export const canAccessTesting = (userEmail?: string | null): boolean => {
-  // Allow in development mode OR for admin users
-  return isDevelopment() || isAdmin(userEmail);
+  // Only allow admin users to access testing features
+  if (!userEmail || userEmail.trim() === '') {
+    return false;
+  }
+  
+  return isAdmin(userEmail);
 };
 
 /**
@@ -44,3 +50,4 @@ export const getAdminConfig = () => {
     adminEmails: ADMIN_EMAILS
   };
 };
+

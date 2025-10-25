@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Mail, Building2, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2, AlertCircle, X } from 'lucide-react';
+import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Mail, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2, AlertCircle, X } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { Logo } from '../ui/Logo';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
@@ -593,14 +594,13 @@ export const PropertiesList: React.FC = () => {
             <div className="flex items-center gap-8">
               <Link to="/dashboard" className="flex items-center gap-3">
                 <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                  <Building2 className="w-5 h-5 text-green-800" />
+                  <Logo size="sm" className="text-green-800" />
                 </div>
                 <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
               </Link>
               
               <nav className="hidden md:flex items-center gap-6">
                 {[
-                  { name: 'Home', path: '/' },
                   { name: 'Dashboard', path: '/dashboard' },
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
@@ -630,9 +630,6 @@ export const PropertiesList: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="p-2">
-                    <User size={16} />
-                  </Button>
                   <Button variant="ghost" size="sm" className="p-2">
                     <HelpCircle size={16} />
                   </Button>
@@ -832,7 +829,7 @@ export const PropertiesList: React.FC = () => {
         {sortedProperties.length === 0 && (
           <div className="text-center py-12">
             <div className="w-16 h-16 glass rounded-full flex items-center justify-center mx-auto mb-4 glow">
-              <Building2 className="w-8 h-8 text-glass-muted" />
+              <Logo size="lg" className="text-glass-muted" />
             </div>
             <h3 className="text-lg font-semibold text-glass mb-2">No properties found</h3>
             <p className="text-glass-muted mb-4">

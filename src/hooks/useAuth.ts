@@ -10,9 +10,10 @@ export const useAuth = () => {
   // Check for existing user session on mount
   useEffect(() => {
     // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       // console.log('Initial session check:', session?.user?.email);
       if (session?.user) {
+        // Use auth metadata first for immediate response, then fetch from database
         const userData = {
           id: session.user.id,
           email: session.user.email || '',
@@ -21,8 +22,28 @@ export const useAuth = () => {
           propertyCount: session.user.user_metadata?.property_count || 1,
           isVerified: session.user.email_confirmed_at !== null
         };
-        // console.log('Setting initial user state:', userData);
         setUser(userData);
+        
+        // Fetch updated user data from database in background (non-blocking)
+        try {
+          const { data: userProfile } = await supabase
+            .from('users')
+            .select('name, phone')
+            .eq('id', session.user.id)
+            .single();
+          
+          if (userProfile) {
+            const updatedUserData = {
+              ...userData,
+              name: userProfile.name || userData.name,
+              phone: userProfile.phone || userData.phone
+            };
+            setUser(updatedUserData);
+          }
+        } catch (error) {
+          // Silently fail - user data from auth metadata is sufficient
+          console.warn('Failed to fetch user profile from database:', error);
+        }
       }
       setLoading(false); // Set loading to false after initial check
     });
@@ -32,6 +53,7 @@ export const useAuth = () => {
       async (_, session) => {
         // console.log('Auth state change:', event, session?.user?.email);
         if (session?.user) {
+          // Use auth metadata first for immediate response
           const userData = {
             id: session.user.id,
             email: session.user.email || '',
@@ -40,8 +62,28 @@ export const useAuth = () => {
             propertyCount: session.user.user_metadata?.property_count || 1,
             isVerified: session.user.email_confirmed_at !== null
           };
-          // console.log('Setting user state:', userData);
           setUser(userData);
+          
+          // Fetch updated user data from database in background (non-blocking)
+          try {
+            const { data: userProfile } = await supabase
+              .from('users')
+              .select('name, phone')
+              .eq('id', session.user.id)
+              .single();
+            
+            if (userProfile) {
+              const updatedUserData = {
+                ...userData,
+                name: userProfile.name || userData.name,
+                phone: userProfile.phone || userData.phone
+              };
+              setUser(updatedUserData);
+            }
+          } catch (error) {
+            // Silently fail - user data from auth metadata is sufficient
+            console.warn('Failed to fetch user profile from database:', error);
+          }
         } else {
           // console.log('Clearing user state');
           setUser(null);
@@ -109,7 +151,7 @@ export const useAuth = () => {
           }
         }
         
-        // User logged in successfully - immediately set user state
+        // User logged in successfully - immediately set user state from auth metadata
         const userData = {
           id: authData.user.id,
           email: authData.user.email || '',
@@ -120,6 +162,27 @@ export const useAuth = () => {
         };
         // console.log('Login successful - immediately setting user state:', userData);
         setUser(userData);
+        
+        // Fetch updated user data from database in background (non-blocking)
+        try {
+          const { data: userProfile } = await supabase
+            .from('users')
+            .select('name, phone')
+            .eq('id', authData.user.id)
+            .single();
+          
+          if (userProfile) {
+            const updatedUserData = {
+              ...userData,
+              name: userProfile.name || userData.name,
+              phone: userProfile.phone || userData.phone
+            };
+            setUser(updatedUserData);
+          }
+        } catch (error) {
+          // Silently fail - user data from auth metadata is sufficient
+          console.warn('Failed to fetch user profile from database:', error);
+        }
         
         // Wait a bit to ensure state is updated before returning
         await new Promise(resolve => setTimeout(resolve, 100));

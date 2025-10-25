@@ -4,7 +4,7 @@ import { MessageCircle, Copy, Check, X, RefreshCw, AlertTriangle } from 'lucide-
 import { Button } from '../webapp-ui/Button';
 
 // TODO: Replace with your actual Telegram bot username
-const TELEGRAM_BOT_USERNAME = '@YourPropertyProBot'; // Change this to your bot username!
+const TELEGRAM_BOT_USERNAME = '@Propertypro_tgBot'; // Change this to your bot username!
 
 interface TelegramLink {
   telegram_username: string | null;

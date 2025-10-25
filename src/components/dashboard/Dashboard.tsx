@@ -6,12 +6,11 @@ import { getRecentActivityTime } from '../../utils/timezoneUtils';
 import { calculateLeaseStatus, getLeaseStatusColor, getLeaseStatusIcon } from '../../utils/leaseStatus';
 import { ImageWithFallback } from '../ui/ImageWithFallback';
 import { NotificationBell } from '../ui/NotificationBell';
+import { Logo } from '../ui/Logo';
 import { Link } from 'react-router-dom';
 import { PaymentService } from '../../services/paymentService';
-import { 
-  Building2, 
+import {
   LogOut, 
-  User, 
   HelpCircle, 
   Plus, 
   IndianRupee, 
@@ -883,14 +882,13 @@ export const Dashboard: React.FC = () => {
             <div className="flex items-center gap-8">
               <Link to="/dashboard" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                 <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                  <Building2 className="w-5 h-5 text-green-800" />
+                  <Logo size="sm" className="text-green-800" />
                 </div>
                 <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
               </Link>
               
               <nav className="hidden md:flex items-center gap-6">
                 {[
-                  { name: 'Home', path: '/' },
                   { name: 'Dashboard', path: '/dashboard' },
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
@@ -922,9 +920,6 @@ export const Dashboard: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="p-2">
-                    <User size={16} />
-                  </Button>
                   <div className="relative help-dropdown">
                     <Button 
                       variant="ghost" 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Building2, 
+   
   ArrowRight, 
   ArrowLeft, 
   Check, 
@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { Logo } from '../ui/Logo';
 import { useAuth } from '../../hooks/useAuth';
 import { formatDateDDMMYYYY } from '../../utils/timezoneUtils';
 
@@ -207,7 +208,7 @@ export const OnboardingWizard: React.FC = () => {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                <Building2 className="w-5 h-5 text-green-800" />
+                <Logo size="sm" className="text-green-800" />
               </div>
               <h1 className="text-xl font-bold text-glass">PropertyPro Setup</h1>
             </div>
@@ -297,7 +298,7 @@ export const OnboardingWizard: React.FC = () => {
                   value={data.propertyName}
                   onChange={handleChange('propertyName')}
                   error={errors.propertyName}
-                  icon={<Building2 size={18} />}
+                  icon={<Logo size="sm" className="text-green-800" />}
                   placeholder="e.g., Green Valley Apartment"
                 />
 
