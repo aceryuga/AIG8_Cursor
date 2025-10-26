@@ -68,7 +68,7 @@ export const SignupPage: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
-  // ✅ NEW FUNCTION ADDED - Trigger Welcome Email via n8n Webhook
+  // ✅ FIXED - Trigger Welcome Email via n8n Webhook (Simpler data structure)
   const triggerWelcomeEmail = async (email: string, name: string, userId: string) => {
     try {
       const response = await fetch('http://localhost:5678/webhook/propertypro-signup', {
@@ -77,11 +77,9 @@ export const SignupPage: React.FC = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          body: {
-            name: name,
-            email: email,
-            userId: userId
-          }
+          name: name,
+          email: email,
+          userId: userId
         })
       });
       
@@ -115,7 +113,7 @@ export const SignupPage: React.FC = () => {
 
     const success = await signup(sanitizedForm);
     if (success) {
-      // ✅ NEW CODE ADDED - Trigger welcome email via n8n webhook
+      // ✅ Trigger welcome email via n8n webhook
       triggerWelcomeEmail(
         sanitizedForm.email,
         sanitizedForm.name,
