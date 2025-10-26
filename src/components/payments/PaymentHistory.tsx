@@ -46,6 +46,8 @@ interface Payment {
   created_at?: string;
   updated_at?: string;
   original_payment_id?: string;
+  is_reconciled?: boolean;
+  reconciliation_status?: 'reconciled' | 'unreconciled';
   // Database fields
   payment_amount: number;
   payment_date: string;
@@ -84,6 +86,7 @@ export const PaymentHistory: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterMethod, setFilterMethod] = useState<string>('all');
   const [filterPaymentType, setFilterPaymentType] = useState<string>('all');
+  const [filterReconciliation, setFilterReconciliation] = useState<string>('all');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [showFilters, setShowFilters] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
@@ -231,6 +234,8 @@ export const PaymentHistory: React.FC = () => {
           created_at: payment.created_at,
           updated_at: payment.updated_at,
           original_payment_id: payment.original_payment_id,
+          is_reconciled: payment.is_reconciled || false,
+          reconciliation_status: payment.is_reconciled ? 'reconciled' : 'unreconciled',
           // Keep database fields for compatibility
           payment_amount: payment.payment_amount,
           payment_date: payment.payment_date,
@@ -290,11 +295,12 @@ export const PaymentHistory: React.FC = () => {
     const matchesStatus = filterStatus === 'all' || payment.status === filterStatus;
     const matchesMethod = filterMethod === 'all' || payment.method.toLowerCase() === filterMethod.toLowerCase();
     const matchesPaymentType = filterPaymentType === 'all' || (payment.paymentType || 'Rent') === filterPaymentType;
+    const matchesReconciliation = filterReconciliation === 'all' || payment.reconciliation_status === filterReconciliation;
     
     const matchesDateRange = (!dateRange.start || payment.date >= dateRange.start) &&
                             (!dateRange.end || payment.date <= dateRange.end);
     
-    return matchesSearch && matchesStatus && matchesMethod && matchesPaymentType && matchesDateRange;
+    return matchesSearch && matchesStatus && matchesMethod && matchesPaymentType && matchesReconciliation && matchesDateRange;
   });
 
   const totalPages = Math.ceil(filteredPayments.length / itemsPerPage);
@@ -331,7 +337,7 @@ export const PaymentHistory: React.FC = () => {
   };
 
   const exportToCSV = () => {
-    const headers = ['Date', 'Property', 'Tenant', 'Amount', 'Type', 'Method', 'Reference', 'Status', 'Notes'];
+    const headers = ['Date', 'Property', 'Tenant', 'Amount', 'Type', 'Method', 'Reference', 'Status', 'Reconciliation', 'Notes'];
     const csvContent = [
       headers.join(','),
       ...filteredPayments.map(payment => [
@@ -343,6 +349,7 @@ export const PaymentHistory: React.FC = () => {
         formatPaymentMethod(payment.method),
         payment.reference,
         payment.status,
+        payment.is_reconciled ? 'Reconciled' : 'Unreconciled',
         `"${payment.notes || ''}"`
       ].join(','))
     ].join('\n');
@@ -556,7 +563,7 @@ export const PaymentHistory: React.FC = () => {
           {/* Expanded Filters */}
           {showFilters && (
             <div className="mt-6 pt-6 border-t border-white border-opacity-20">
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+              <div className="grid grid-cols-2 md:grid-cols-7 gap-3 items-end">
                 <div>
                   <label className="block text-xs font-medium text-glass mb-1">Status</label>
                   <select
@@ -603,6 +610,19 @@ export const PaymentHistory: React.FC = () => {
                 </div>
 
                 <div>
+                  <label className="block text-xs font-medium text-glass mb-1">Reconciliation</label>
+                  <select
+                    value={filterReconciliation}
+                    onChange={(e) => setFilterReconciliation(e.target.value)}
+                    className="w-full glass-input rounded-lg px-2 py-1.5 text-sm text-glass h-9"
+                  >
+                    <option value="all">All</option>
+                    <option value="reconciled">Reconciled</option>
+                    <option value="unreconciled">Unreconciled</option>
+                  </select>
+                </div>
+
+                <div>
                   <label className="block text-xs font-medium text-glass mb-1">From</label>
                   <input
                     type="date"
@@ -630,6 +650,7 @@ export const PaymentHistory: React.FC = () => {
                       setFilterStatus('all');
                       setFilterMethod('all');
                       setFilterPaymentType('all');
+                      setFilterReconciliation('all');
                       setDateRange({ start: '', end: '' });
                       setSearchTerm('');
                     }}
@@ -664,6 +685,7 @@ export const PaymentHistory: React.FC = () => {
                   <th className="text-left p-4 text-sm font-medium text-glass">Method</th>
                   <th className="text-left p-4 text-sm font-medium text-glass">Reference</th>
                   <th className="text-left p-4 text-sm font-medium text-glass">Status</th>
+                  <th className="text-left p-4 text-sm font-medium text-glass">Reconciliation</th>
                   <th className="text-left p-4 text-sm font-medium text-glass">Actions</th>
                 </tr>
               </thead>
@@ -705,15 +727,26 @@ export const PaymentHistory: React.FC = () => {
                       </span>
                     </td>
                     <td className="p-4">
+                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
+                        payment.is_reconciled 
+                          ? 'text-green-700 bg-green-100' 
+                          : 'text-gray-600 bg-gray-100'
+                      }`}>
+                        {payment.is_reconciled ? (
+                          <>
+                            <CheckCircle size={14} />
+                            Reconciled
+                          </>
+                        ) : (
+                          <>
+                            <Clock size={14} />
+                            Unreconciled
+                          </>
+                        )}
+                      </span>
+                    </td>
+                    <td className="p-4">
                       <div className="flex gap-2">
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          className="p-1"
-                          title="View Details"
-                        >
-                          <FileText size={14} />
-                        </Button>
                         <Button 
                           variant="ghost" 
                           size="sm" 

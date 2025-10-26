@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { formatFileSize } from '../../utils/propertyImages';
-import { getUserSubscription, type UserSubscription } from '../../utils/settingsUtils';
+import { getUserSubscription, getUserProfile, type UserSubscription } from '../../utils/settingsUtils';
 
 // Property interface removed as it's not used in this component
 
@@ -102,6 +102,9 @@ export const Dashboard: React.FC = () => {
   // Storage calculation states
   const [totalStorageBytes, setTotalStorageBytes] = useState(0);
   const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
+  
+  // User profile state
+  const [userProfile, setUserProfile] = useState<any>(null);
 
   // Close dropdowns when clicking outside
   React.useEffect(() => {
@@ -546,6 +549,26 @@ export const Dashboard: React.FC = () => {
     fetchData();
   }, [user?.id]);
 
+  // Fetch user profile from custom users table
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      if (!user?.id) {
+        setUserProfile(null);
+        return;
+      }
+
+      try {
+        const profile = await getUserProfile(user.id);
+        setUserProfile(profile);
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+        setUserProfile(null);
+      }
+    };
+
+    fetchUserProfile();
+  }, [user?.id]);
+
   // ⚡ OPTIMIZED: Storage calculation effect - uses already fetched properties
   useEffect(() => {
     const calculateStorage = async () => {
@@ -820,7 +843,7 @@ export const Dashboard: React.FC = () => {
 
               {/* User Menu */}
               <div className="flex items-center gap-2">
-                <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
+                <span className="text-glass hidden sm:block whitespace-nowrap">{userProfile?.name || user?.name}</span>
                 <div className="flex items-center gap-2">
                   <div className="relative help-dropdown">
                     <Button 
@@ -915,7 +938,7 @@ export const Dashboard: React.FC = () => {
         {/* Welcome Section */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-glass mb-2">
-            Welcome back, {user?.name?.split(' ')[0] || 'User'}!
+            Welcome back, {userProfile?.name?.split(' ')[0] || user?.name?.split(' ')[0] || 'User'}!
           </h1>
           <p className="text-xl text-glass-muted">
             Here's what's happening with your property portfolio today.

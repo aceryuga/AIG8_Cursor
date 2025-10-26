@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Header } from './components/ui/header';
 import { NavBar } from './components/ui/tubelight-navbar';
@@ -32,6 +32,7 @@ import { AddProperty } from './components/properties/AddProperty';
 import { PaymentHistory } from './components/payments/PaymentHistory';
 import { RecordPayment } from './components/payments/RecordPayment'; 
 import { AIReconciliation } from './components/payments/AIReconciliation';
+import { ReconciliationHistory } from './components/payments/ReconciliationHistory';
 import { DocumentVault } from './components/documents/DocumentVault';
 import { DocumentUpload } from './components/documents/DocumentUpload';
 import { DocumentViewer } from './components/documents/DocumentViewer';
@@ -369,6 +370,13 @@ function App() {
             <ProtectedRoute>
               <GlobalLayout>
                 <AIReconciliation />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/payments/reconciliation/history" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <ReconciliationHistory />
               </GlobalLayout>
             </ProtectedRoute>
           } />

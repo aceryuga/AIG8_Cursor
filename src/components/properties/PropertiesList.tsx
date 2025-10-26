@@ -223,27 +223,22 @@ export const PropertiesList: React.FC = () => {
       const property = supabaseProperties.find(p => p.id === id);
       const propertyName = property?.name || 'Unknown Property';
       
-      // Store timestamp in local timezone format to match existing data
+      // Store timestamp in UTC format (timestamptz) for consistent timezone handling
       const now = new Date();
-      // Create timestamp in the same format as existing data (local timezone without Z)
+      const currentTime = now.toISOString(); // UTC timestamp with timezone
+      
+      // Extract date in YYYY-MM-DD format for end_date
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const seconds = String(now.getSeconds()).padStart(2, '0');
-      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
-      
-      const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
       const currentDate = `${year}-${month}-${day}`;
       
       // Debug logging
       console.log('Property deletion debug - storing:', {
         propertyName,
-        currentTime,
+        currentTime, // Now using UTC timestamp
         currentDate,
-        now: now.toISOString(),
-        nowLocal: now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+        timestamp: now.toISOString()
       });
       
       // 1) End-date active leases for this property with updated_at timestamp
@@ -258,7 +253,7 @@ export const PropertiesList: React.FC = () => {
         .update({ 
           is_active: false, 
           end_date: currentDate,
-          updated_at: currentTime  // Local timezone timestamp
+          updated_at: currentTime  // UTC timestamp with timezone
         })
         .eq('property_id', id)
         .eq('is_active', true);
@@ -287,7 +282,7 @@ export const PropertiesList: React.FC = () => {
         .update({ 
           active: 'N', 
           status: 'vacant',
-          updated_at: currentTime  // Local timezone timestamp
+          updated_at: currentTime  // UTC timestamp with timezone
         })
         .eq('id', id);
 
