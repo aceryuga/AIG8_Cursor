@@ -68,6 +68,34 @@ export const SignupPage: React.FC = () => {
     return Object.keys(newErrors).length === 0;
   };
 
+  // ✅ NEW FUNCTION ADDED - Trigger Welcome Email via n8n Webhook
+  const triggerWelcomeEmail = async (email: string, name: string, userId: string) => {
+    try {
+      const response = await fetch('http://localhost:5678/webhook/propertypro-signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          body: {
+            name: name,
+            email: email,
+            userId: userId
+          }
+        })
+      });
+      
+      if (response.ok) {
+        console.log('✅ Welcome email triggered successfully!');
+      } else {
+        console.log('⚠️ Welcome email API responded with status:', response.status);
+      }
+    } catch (error) {
+      console.error('❌ Failed to trigger welcome email:', error);
+      // Don't block signup if email fails
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -87,6 +115,13 @@ export const SignupPage: React.FC = () => {
 
     const success = await signup(sanitizedForm);
     if (success) {
+      // ✅ NEW CODE ADDED - Trigger welcome email via n8n webhook
+      triggerWelcomeEmail(
+        sanitizedForm.email,
+        sanitizedForm.name,
+        'new-user'
+      );
+      
       navigate('/auth/verify', { state: { email: sanitizedForm.email } });
     }
   };
