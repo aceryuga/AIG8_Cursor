@@ -120,7 +120,7 @@ export const Dashboard: React.FC = () => {
     };
   }, [showHelp]);
 
-  // Fetch data from Supabase
+  // Fetch data from Supabase - OPTIMIZED for performance
   useEffect(() => {
     if (!user?.id) {
       setDataLoading(false);
@@ -132,269 +132,175 @@ export const Dashboard: React.FC = () => {
         setDataLoading(true);
         setDataError(null);
 
-        // Fetch properties with their leases and tenants (only active properties)
-        const { data: properties, error: propError } = await supabase
-          .from('properties')
-          .select(`
-            *,
-            leases(
-              id,
-              monthly_rent,
-              security_deposit,
-              maintenance_charges,
-              start_date,
-              end_date,
-              is_active,
-              created_at,
-              updated_at,
-              tenants(
-                name,
-                phone,
-                email
+        // ⚡ OPTIMIZATION: Fetch all data in parallel instead of sequentially
+        const [
+          propertiesResult,
+          deletedPropertiesResult,
+          documentsResult,
+          propertyImagesResult,
+          maintenanceResult,
+          communicationResult,
+          rentalIncreasesResult
+        ] = await Promise.allSettled([
+          // Fetch properties with their leases and tenants (only active properties)
+          supabase
+            .from('properties')
+            .select(`
+              *,
+              leases(
+                id,
+                monthly_rent,
+                security_deposit,
+                maintenance_charges,
+                start_date,
+                end_date,
+                is_active,
+                created_at,
+                updated_at,
+                tenants(
+                  name,
+                  phone,
+                  email
+                )
+              ),
+              property_images!left(
+                id,
+                image_url,
+                is_primary
               )
-            ),
-            property_images!left(
-              id,
-              image_url,
-              is_primary
-            )
-          `)
-          .eq('owner_id', user.id)
-          .eq('active', 'Y');
+            `)
+            .eq('owner_id', user.id)
+            .eq('active', 'Y'),
 
-        if (propError) {
-          throw propError;
-        }
+          // Fetch recently deleted properties for audit trail
+          supabase
+            .from('properties')
+            .select(`id, name, updated_at`)
+            .eq('owner_id', user.id)
+            .eq('active', 'N')
+            .order('updated_at', { ascending: false })
+            .limit(5),
 
-        setSupabaseProperties(properties || []);
-
-        // Fetch recent payments for payment status calculation using centralized service
-        const paymentsData = await PaymentService.getPaymentsForProperties(properties?.map(p => p.id) || []);
-
-        // Fetch recently deleted properties for audit trail
-        const { data: deletedProperties, error: deletedError } = await supabase
-          .from('properties')
-          .select(`
-            id,
-            name,
-            updated_at
-          `)
-          .eq('owner_id', user.id)
-          .eq('active', 'N')
-          .order('updated_at', { ascending: false })
-          .limit(5);
-
-        if (deletedError) {
-          console.warn('Error fetching deleted properties:', deletedError);
-        }
-
-        setPayments(paymentsData);
-
-        // Fetch recent documents for document upload activities
-        const { data: documentsData, error: documentsError } = await supabase
-          .from('documents')
-          .select(`
-            id,
-            name,
-            doc_type,
-            uploaded_at,
-            property_id,
-            properties!inner(
+          // Fetch recent documents for document upload activities
+          supabase
+            .from('documents')
+            .select(`
               id,
               name,
-              owner_id
-            )
-          `)
-          .eq('properties.owner_id', user.id)
-          .order('uploaded_at', { ascending: false })
-          .limit(10) as { data: Array<{
-            id: string;
-            name: string;
-            doc_type: string;
-            uploaded_at: string;
-            property_id: string;
-            properties: {
-              id: string;
-              name: string;
-              owner_id: string;
-            };
-          }> | null; error: any };
+              doc_type,
+              uploaded_at,
+              property_id,
+              properties!inner(id, name, owner_id)
+            `)
+            .eq('properties.owner_id', user.id)
+            .order('uploaded_at', { ascending: false })
+            .limit(10),
 
-        if (documentsError) {
-          console.warn('Error fetching documents:', documentsError);
-        }
-
-        // Fetch recent property images for gallery upload activities
-        const { data: propertyImagesData, error: propertyImagesError } = await supabase
-          .from('property_images')
-          .select(`
-            id,
-            image_name,
-            created_at,
-            properties!inner(
+          // Fetch recent property images for gallery upload activities
+          supabase
+            .from('property_images')
+            .select(`
               id,
-              name,
-              owner_id
-            )
-          `)
-          .eq('properties.owner_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(10) as { data: Array<{
-            id: string;
-            image_name: string;
-            created_at: string;
-            properties: {
-              id: string;
-              name: string;
-              owner_id: string;
-            };
-          }> | null; error: any };
+              image_name,
+              created_at,
+              properties!inner(id, name, owner_id)
+            `)
+            .eq('properties.owner_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(10),
 
-        if (propertyImagesError) {
-          console.warn('Error fetching property images:', propertyImagesError);
-        }
-
-        // Fetch recent maintenance requests
-        const { data: maintenanceData, error: maintenanceError } = await supabase
-          .from('maintenance_requests')
-          .select(`
-            id,
-            description,
-            status,
-            created_at,
-            properties!inner(
+          // Fetch recent maintenance requests
+          supabase
+            .from('maintenance_requests')
+            .select(`
               id,
-              name,
-              owner_id
-            ),
-            tenants(
-              name
-            )
-          `)
-          .eq('properties.owner_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(10) as { data: Array<{
-            id: string;
-            description: string;
-            status: string;
-            created_at: string;
-            properties: {
-              id: string;
-              name: string;
-              owner_id: string;
-            };
-            tenants: {
-              name: string;
-            } | null;
-          }> | null; error: any };
+              description,
+              status,
+              created_at,
+              properties!inner(id, name, owner_id),
+              tenants(name)
+            `)
+            .eq('properties.owner_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(10),
 
-        if (maintenanceError) {
-          console.warn('Error fetching maintenance requests:', maintenanceError);
-        }
-
-        // Fetch recent communication logs
-        let communicationData: Array<{
-          id: string;
-          mode: string;
-          message: string;
-          sent_at: string;
-          properties: {
-            id: string;
-            name: string;
-            owner_id: string;
-          };
-          tenants: {
-            name: string;
-          } | null;
-        }> | null = null;
-        try {
-          const { data, error: communicationError } = await supabase
+          // Fetch recent communication logs (optional - may not exist)
+          supabase
             .from('communication_log')
             .select(`
               id,
               mode,
               message,
               sent_at,
-              properties!inner(
-                id,
-                name,
-                owner_id
-              ),
-              tenants(
-                name
-              )
+              properties!inner(id, name, owner_id),
+              tenants(name)
             `)
             .eq('properties.owner_id', user.id)
             .order('sent_at', { ascending: false })
-            .limit(10) as { data: Array<{
-              id: string;
-              mode: string;
-              message: string;
-              sent_at: string;
-              properties: {
-                id: string;
-                name: string;
-                owner_id: string;
-              };
-              tenants: {
-                name: string;
-              } | null;
-            }> | null; error: any };
+            .limit(10),
 
-          if (communicationError) {
-            console.warn('Error fetching communication logs:', communicationError);
-          } else {
-            communicationData = data;
-          }
-        } catch (error) {
-          console.warn('Communication logs table may not exist or have permission issues:', error);
-        }
-
-        // Fetch recent rental increases
-        const { data: rentalIncreasesData, error: rentalIncreasesError } = await supabase
-          .from('rental_increases')
-          .select(`
-            id,
-            old_rent,
-            new_rent,
-            effective_date,
-            created_at,
-            leases!inner(
+          // Fetch recent rental increases
+          supabase
+            .from('rental_increases')
+            .select(`
               id,
-              properties!inner(
+              old_rent,
+              new_rent,
+              effective_date,
+              created_at,
+              leases!inner(
                 id,
-                name,
-                owner_id
-              ),
-              tenants(
-                name
+                properties!inner(id, name, owner_id),
+                tenants(name)
               )
-            )
-          `)
-          .eq('leases.properties.owner_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(10) as { data: Array<{
-            id: string;
-            old_rent: number;
-            new_rent: number;
-            effective_date: string;
-            created_at: string;
-            leases: {
-              id: string;
-              properties: {
-                id: string;
-                name: string;
-                owner_id: string;
-              };
-              tenants: {
-                name: string;
-              } | null;
-            };
-          }> | null; error: any };
+            `)
+            .eq('leases.properties.owner_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(10)
+        ]);
 
-        if (rentalIncreasesError) {
-          console.warn('Error fetching rental increases:', rentalIncreasesError);
+        // Extract data from results
+        const properties = propertiesResult.status === 'fulfilled' && !propertiesResult.value.error
+          ? propertiesResult.value.data || []
+          : [];
+        
+        const deletedProperties = deletedPropertiesResult.status === 'fulfilled' && !deletedPropertiesResult.value.error
+          ? deletedPropertiesResult.value.data || []
+          : [];
+        
+        const documentsData = documentsResult.status === 'fulfilled' && !documentsResult.value.error
+          ? documentsResult.value.data || []
+          : [];
+        
+        const propertyImagesData = propertyImagesResult.status === 'fulfilled' && !propertyImagesResult.value.error
+          ? propertyImagesResult.value.data || []
+          : [];
+        
+        const maintenanceData = maintenanceResult.status === 'fulfilled' && !maintenanceResult.value.error
+          ? maintenanceResult.value.data || []
+          : [];
+        
+        const communicationData = communicationResult.status === 'fulfilled' && !communicationResult.value.error
+          ? communicationResult.value.data || []
+          : [];
+        
+        const rentalIncreasesData = rentalIncreasesResult.status === 'fulfilled' && !rentalIncreasesResult.value.error
+          ? rentalIncreasesResult.value.data || []
+          : [];
+
+        // Check for critical errors
+        if (propertiesResult.status === 'rejected' || (propertiesResult.status === 'fulfilled' && propertiesResult.value.error)) {
+          throw propertiesResult.status === 'rejected' ? propertiesResult.reason : propertiesResult.value.error;
         }
+
+        setSupabaseProperties(properties);
+
+        // Fetch payments for properties (only after we have property IDs)
+        const paymentsData = properties.length > 0 
+          ? await PaymentService.getPaymentsForProperties(properties.map(p => p.id))
+          : [];
+
+        setPayments(paymentsData);
 
         // Generate activities from recent payments and properties
         const recentActivities: Activity[] = [];
@@ -528,12 +434,13 @@ export const Dashboard: React.FC = () => {
 
         // Add document upload activities
         if (documentsData && documentsData.length > 0) {
-          documentsData.forEach((document) => {
-            if (document.uploaded_at) {
+          documentsData.forEach((document: any) => {
+            if (document.uploaded_at && document.properties) {
+              const propData = Array.isArray(document.properties) ? document.properties[0] : document.properties;
               recentActivities.push({
                 id: `document-${document.id}`,
                 type: 'document',
-                message: `Document "${document.name}" uploaded to "${document.properties.name}"`,
+                message: `Document "${document.name}" uploaded to "${propData?.name || 'Unknown Property'}"`,
                 time: getRecentActivityTime(document.uploaded_at),
                 timestamp: new Date(document.uploaded_at).getTime(),
                 status: 'info'
@@ -544,12 +451,13 @@ export const Dashboard: React.FC = () => {
 
         // Add gallery upload activities
         if (propertyImagesData && propertyImagesData.length > 0) {
-          propertyImagesData.forEach((image) => {
-            if (image.created_at) {
+          propertyImagesData.forEach((image: any) => {
+            if (image.created_at && image.properties) {
+              const propData = Array.isArray(image.properties) ? image.properties[0] : image.properties;
               recentActivities.push({
                 id: `gallery-${image.id}`,
                 type: 'gallery',
-                message: `Image "${image.image_name}" uploaded to "${image.properties.name}"`,
+                message: `Image "${image.image_name}" uploaded to "${propData?.name || 'Unknown Property'}"`,
                 time: getRecentActivityTime(image.created_at),
                 timestamp: new Date(image.created_at).getTime(),
                 status: 'info'
@@ -560,13 +468,15 @@ export const Dashboard: React.FC = () => {
 
         // Add maintenance request activities
         if (maintenanceData && maintenanceData.length > 0) {
-          maintenanceData.forEach((request) => {
-            if (request.created_at) {
-              const tenant = request.tenants?.name || 'Unknown Tenant';
+          maintenanceData.forEach((request: any) => {
+            if (request.created_at && request.properties) {
+              const propData = Array.isArray(request.properties) ? request.properties[0] : request.properties;
+              const tenantData = Array.isArray(request.tenants) ? request.tenants[0] : request.tenants;
+              const tenant = tenantData?.name || 'Unknown Tenant';
               recentActivities.push({
                 id: `maintenance-${request.id}`,
                 type: 'maintenance',
-                message: `Maintenance request from ${tenant} at "${request.properties.name}"`,
+                message: `Maintenance request from ${tenant} at "${propData?.name || 'Unknown Property'}"`,
                 time: getRecentActivityTime(request.created_at),
                 timestamp: new Date(request.created_at).getTime(),
                 status: request.status === 'open' ? 'warning' : 'info'
@@ -577,9 +487,11 @@ export const Dashboard: React.FC = () => {
 
         // Add communication log activities
         if (communicationData && communicationData.length > 0) {
-          communicationData.forEach((comm) => {
-            if (comm.sent_at) {
-              const tenant = comm.tenants?.name || 'Unknown Tenant';
+          communicationData.forEach((comm: any) => {
+            if (comm.sent_at && comm.properties) {
+              const propData = Array.isArray(comm.properties) ? comm.properties[0] : comm.properties;
+              const tenantData = Array.isArray(comm.tenants) ? comm.tenants[0] : comm.tenants;
+              const tenant = tenantData?.name || 'Unknown Tenant';
               const modeText = comm.mode === 'call' ? 'call' : 
                               comm.mode === 'sms' ? 'SMS' : 
                               comm.mode === 'email' ? 'email' : 
@@ -587,7 +499,7 @@ export const Dashboard: React.FC = () => {
               recentActivities.push({
                 id: `communication-${comm.id}`,
                 type: 'communication',
-                message: `${modeText.charAt(0).toUpperCase() + modeText.slice(1)} sent to ${tenant} at "${comm.properties.name}"`,
+                message: `${modeText.charAt(0).toUpperCase() + modeText.slice(1)} sent to ${tenant} at "${propData?.name || 'Unknown Property'}"`,
                 time: getRecentActivityTime(comm.sent_at),
                 timestamp: new Date(comm.sent_at).getTime(),
                 status: 'info'
@@ -598,10 +510,13 @@ export const Dashboard: React.FC = () => {
 
         // Add rental increase activities
         if (rentalIncreasesData && rentalIncreasesData.length > 0) {
-          rentalIncreasesData.forEach((increase) => {
-            if (increase.created_at) {
-              const tenant = increase.leases?.tenants?.name || 'Unknown Tenant';
-              const propertyName = increase.leases?.properties?.name || 'Unknown Property';
+          rentalIncreasesData.forEach((increase: any) => {
+            if (increase.created_at && increase.leases) {
+              const leaseData = Array.isArray(increase.leases) ? increase.leases[0] : increase.leases;
+              const propData = Array.isArray(leaseData?.properties) ? leaseData.properties[0] : leaseData?.properties;
+              const tenantData = Array.isArray(leaseData?.tenants) ? leaseData.tenants[0] : leaseData?.tenants;
+              const tenant = tenantData?.name || 'Unknown Tenant';
+              const propertyName = propData?.name || 'Unknown Property';
               recentActivities.push({
                 id: `rental-increase-${increase.id}`,
                 type: 'rental',
@@ -631,82 +546,69 @@ export const Dashboard: React.FC = () => {
     fetchData();
   }, [user?.id]);
 
-  // Storage calculation effect
+  // ⚡ OPTIMIZED: Storage calculation effect - uses already fetched properties
   useEffect(() => {
     const calculateStorage = async () => {
-      if (!user?.id) return;
+      if (!user?.id || supabaseProperties.length === 0) {
+        // If no properties loaded yet, wait for main data fetch
+        if (!user?.id) return;
+        // Fallback: fetch minimal data needed
+        if (supabaseProperties.length === 0 && !dataLoading) {
+          setTotalStorageBytes(0);
+          return;
+        }
+        return;
+      }
       
       try {
-        // Fetch user subscription plan for storage limit display
-        try {
-          const subscription = await getUserSubscription(user.id);
-          setUserSubscription(subscription);
-        } catch (e) {
-          console.warn('Failed to fetch user subscription for Dashboard:', e);
-        }
-
-        // Get documents storage
-        const { data: documentsData, error: documentsError } = await supabase
-          .from('documents')
-          .select('file_size')
-          .eq('uploaded_by', user.id)
-          .not('name', 'like', '[DELETED]%');
+        // Fetch subscription and storage data in parallel
+        const [subscriptionResult, documentsResult, imagesResult] = await Promise.allSettled([
+          // Fetch user subscription plan for storage limit display
+          getUserSubscription(user.id),
           
-        if (documentsError) {
-          console.error('Error fetching documents storage:', documentsError);
-          throw documentsError;
-        }
-        
-        // Get user's property IDs first
-        const { data: userProperties, error: propertiesError } = await supabase
-          .from('properties')
-          .select('id')
-          .eq('owner_id', user.id)
-          .eq('active', 'Y');
+          // Get documents storage
+          supabase
+            .from('documents')
+            .select('file_size')
+            .eq('uploaded_by', user.id)
+            .not('name', 'like', '[DELETED]%'),
           
-        if (propertiesError) {
-          console.error('Error fetching properties:', propertiesError);
-          throw propertiesError;
-        }
-        
-        const propertyIds = userProperties?.map(p => p.id) || [];
-        
-        // Get property images storage using the property IDs
-        let imagesData: Array<{ image_size: number }> = [];
-        if (propertyIds.length > 0) {
-          const { data, error: imagesError } = await supabase
+          // Get property images storage using already fetched property IDs
+          supabase
             .from('property_images')
             .select('image_size')
-            .in('property_id', propertyIds);
-            
-          if (imagesError) {
-            console.error('Error fetching images storage:', imagesError);
-            throw imagesError;
-          }
-          imagesData = data || [];
+            .in('property_id', supabaseProperties.map(p => p.id))
+        ]);
+
+        // Extract subscription
+        if (subscriptionResult.status === 'fulfilled') {
+          setUserSubscription(subscriptionResult.value);
         }
+
+        // Extract documents data
+        const documentsData = documentsResult.status === 'fulfilled' && !documentsResult.value.error
+          ? documentsResult.value.data || []
+          : [];
+
+        // Extract images data
+        const imagesData = imagesResult.status === 'fulfilled' && !imagesResult.value.error
+          ? imagesResult.value.data || []
+          : [];
         
         // Calculate total storage from both sources
-        const documentsBytes = documentsData?.reduce((sum, doc) => sum + (doc.file_size || 0), 0) || 0;
-        const imagesBytes = imagesData?.reduce((sum, img) => sum + (img.image_size || 0), 0) || 0;
+        const documentsBytes = documentsData.reduce((sum, doc) => sum + (doc.file_size || 0), 0);
+        const imagesBytes = imagesData.reduce((sum, img) => sum + (img.image_size || 0), 0);
         const totalBytes = documentsBytes + imagesBytes;
-        
-        console.log('Storage calculation:', {
-          documentsCount: documentsData?.length || 0,
-          documentsBytes,
-          imagesCount: imagesData?.length || 0,
-          imagesBytes,
-          totalBytes
-        });
         
         setTotalStorageBytes(totalBytes);
       } catch (error) {
         console.error('Error calculating storage:', error);
+        setTotalStorageBytes(0);
       }
     };
     
     calculateStorage();
-  }, [user?.id]);
+  }, [user?.id, supabaseProperties, dataLoading]);
 
   const handleLogout = async () => {
     await logout();

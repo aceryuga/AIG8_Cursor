@@ -97,42 +97,29 @@ export const DocumentVault: React.FC = () => {
     navigate('/auth/login');
   };
 
-  // Fetch documents and properties from Supabase
+  // ⚡ OPTIMIZED: Fetch documents and properties from Supabase
   useEffect(() => {
     const fetchData = async () => {
-      console.log('DocumentVault: fetchData called, user:', user?.id);
       if (!user?.id) {
-        console.log('No user ID, setting loading to false');
         setLoading(false);
         return;
       }
 
       try {
-        console.log('Starting data fetch...');
         setLoading(true);
         
-
-        // Fetch documents
-        console.log('Fetching user documents...');
-        const documentsData = await fetchUserDocuments();
-        console.log('Fetched documents:', documentsData);
+        // Fetch documents and properties in parallel for better performance
+        const [documentsData, propertiesResult] = await Promise.all([
+          fetchUserDocuments(),
+          supabase
+            .from('properties')
+            .select('id, name')
+            .eq('owner_id', user.id)
+            .eq('active', 'Y')
+        ]);
         
-        // Fetch properties for property names
-        console.log('Fetching properties...');
-        const { data: propertiesData, error: propertiesError } = await supabase
-          .from('properties')
-          .select('id, name')
-          .eq('owner_id', user.id)
-          .eq('active', 'Y');
-
-        if (propertiesError) {
-          console.error('Error fetching properties:', propertiesError);
-        } else {
-          console.log('Fetched properties:', propertiesData);
-        }
-
-        const propertiesMap = new Map((propertiesData || []).map(p => [p.id, p.name]));
-        console.log('Properties map:', propertiesMap);
+        const propertiesData = propertiesResult.error ? [] : (propertiesResult.data || []);
+        const propertiesMap = new Map(propertiesData.map(p => [p.id, p.name]));
         
         // Transform documents data
         const transformedDocuments: Document[] = documentsData.map(doc => ({
@@ -145,20 +132,17 @@ export const DocumentVault: React.FC = () => {
           uploadDate: doc.uploaded_at || '',
           url: doc.url,
           thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
-          property_id: doc.property_id // Preserve property_id for lease status calculation
+          property_id: doc.property_id
         }));
-
-        console.log('Transformed documents:', transformedDocuments);
         
         // Enhance documents with lease status
         const documentsWithLeaseStatus = await enhanceDocumentsWithLeaseStatus(transformedDocuments);
         setDocuments(documentsWithLeaseStatus);
-        setProperties(propertiesData || []);
+        setProperties(propertiesData);
         
       } catch (error) {
         console.error('Error fetching data:', error);
       } finally {
-        console.log('Data fetch completed, setting loading to false');
         setLoading(false);
       }
     };
@@ -168,9 +152,7 @@ export const DocumentVault: React.FC = () => {
 
   // File upload handlers
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    console.log('File upload triggered:', e.target.files);
     const files = Array.from(e.target.files || []);
-    console.log('Files selected:', files);
     setUploadFiles(prev => [...prev, ...files]);
   };
 
@@ -188,7 +170,6 @@ export const DocumentVault: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     const files = Array.from(e.dataTransfer.files);
-    console.log('Files dropped:', files);
     setUploadFiles(prev => [...prev, ...files]);
   };
 
@@ -242,12 +223,7 @@ export const DocumentVault: React.FC = () => {
   };
 
   const handleUpload = async () => {
-    console.log('Upload button clicked, files:', uploadFiles);
-    console.log('Selected property:', selectedPropertyId);
-    console.log('Selected doc type:', selectedDocType);
-    
     if (uploadFiles.length === 0) {
-      console.log('No files to upload');
       return;
     }
     
@@ -256,30 +232,23 @@ export const DocumentVault: React.FC = () => {
       return;
     }
     
-    console.log('Starting upload process...');
     setUploading(true);
     
     try {
-      console.log('Creating upload promises for', uploadFiles.length, 'files');
-      const uploadPromises = uploadFiles.map(async (file, index) => {
-        console.log(`Uploading file ${index + 1}:`, file.name);
+      const uploadPromises = uploadFiles.map(async (file) => {
         return await uploadDocument(
           file,
-          selectedPropertyId, // propertyId
-          undefined, // leaseId
-          undefined, // tenantId
-          selectedDocType // docType
+          selectedPropertyId,
+          undefined,
+          undefined,
+          selectedDocType
         );
       });
       
-      console.log('Waiting for all uploads to complete...');
       await Promise.all(uploadPromises);
-      console.log('All uploads completed successfully');
       
       // Refresh documents
-      console.log('Refreshing documents list...');
       const documentsData = await fetchUserDocuments();
-      console.log('Fetched documents:', documentsData);
       
       const { data: propertiesData } = await supabase
         .from('properties')
@@ -299,10 +268,8 @@ export const DocumentVault: React.FC = () => {
         uploadDate: doc.uploaded_at || '',
         url: doc.url,
         thumbnail: 'https://images.pexels.com/photos/4386321/pexels-photo-4386321.jpeg?auto=compress&cs=tinysrgb&w=400',
-        property_id: doc.property_id // Preserve property_id for lease status calculation
+        property_id: doc.property_id
       }));
-
-      console.log('Setting documents state:', transformedDocuments);
       
       // Enhance documents with lease status
       const documentsWithLeaseStatus = await enhanceDocumentsWithLeaseStatus(transformedDocuments);
@@ -624,10 +591,7 @@ export const DocumentVault: React.FC = () => {
           </div>
           <Button 
             className="flex items-center gap-2"
-            onClick={() => {
-              console.log('Upload Documents button clicked');
-              setShowUploadModal(true);
-            }}
+            onClick={() => setShowUploadModal(true)}
           >
             <Plus size={18} />
             Upload Documents
@@ -860,10 +824,7 @@ export const DocumentVault: React.FC = () => {
                 : 'Get started by uploading your first document'
               }
             </p>
-            <Button onClick={() => {
-              console.log('Empty state Upload Documents button clicked');
-              setShowUploadModal(true);
-            }}>
+            <Button               onClick={() => setShowUploadModal(true)}>
               Upload Documents
             </Button>
           </div>
@@ -884,7 +845,6 @@ export const DocumentVault: React.FC = () => {
                 </div>
                 <button
                   onClick={() => {
-                    console.log('Modal close button clicked');
                     setShowUploadModal(false);
                     setUploadFiles([]);
                     setSelectedPropertyId('');
@@ -902,10 +862,7 @@ export const DocumentVault: React.FC = () => {
                   <label className="text-sm font-medium text-glass">Select Property</label>
                   <select
                     value={selectedPropertyId}
-                    onChange={(e) => {
-                      console.log('Property selected:', e.target.value);
-                      setSelectedPropertyId(e.target.value);
-                    }}
+                    onChange={(e) => setSelectedPropertyId(e.target.value)}
                     className="w-full p-3 glass rounded-lg border border-white border-opacity-20 focus:border-green-800 focus:outline-none text-glass"
                   >
                     <option value="">Choose a property...</option>
@@ -922,10 +879,7 @@ export const DocumentVault: React.FC = () => {
                   <label className="text-sm font-medium text-glass">Document Type</label>
                   <select
                     value={selectedDocType}
-                    onChange={(e) => {
-                      console.log('Document type selected:', e.target.value);
-                      setSelectedDocType(e.target.value);
-                    }}
+                    onChange={(e) => setSelectedDocType(e.target.value)}
                     className="w-full p-3 glass rounded-lg border border-white border-opacity-20 focus:border-green-800 focus:outline-none text-glass"
                   >
                     {docTypes.map((type) => (
@@ -961,10 +915,7 @@ export const DocumentVault: React.FC = () => {
                     type="file"
                     multiple
                     accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xlsx,.xls"
-                    onChange={(e) => {
-                      console.log('File input onChange triggered:', e.target.files);
-                      handleFileUpload(e);
-                    }}
+                      onChange={handleFileUpload}
                     style={{ display: 'none' }}
                     ref={fileInputRef}
                   />
@@ -975,12 +926,8 @@ export const DocumentVault: React.FC = () => {
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      console.log('Choose Files button clicked');
                       if (fileInputRef.current) {
-                        console.log('Triggering file input click');
                         fileInputRef.current.click();
-                      } else {
-                        console.error('File input ref not found');
                       }
                     }}
                     onMouseDown={(e) => e.stopPropagation()}
@@ -1017,7 +964,6 @@ export const DocumentVault: React.FC = () => {
                 <div className="flex gap-4">
                   <Button
                     onClick={() => {
-                      console.log('Cancel button clicked');
                       setShowUploadModal(false);
                       setUploadFiles([]);
                       setSelectedPropertyId('');
@@ -1029,10 +975,7 @@ export const DocumentVault: React.FC = () => {
                     Cancel
                   </Button>
                   <Button
-                    onClick={() => {
-                      console.log('Upload Documents button clicked in modal');
-                      handleUpload();
-                    }}
+                    onClick={handleUpload}
                     loading={uploading}
                     disabled={uploadFiles.length === 0 || uploading || !selectedPropertyId}
                     className="flex-1"

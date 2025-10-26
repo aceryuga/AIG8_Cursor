@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Header } from './components/ui/header';
 import { NavBar } from './components/ui/tubelight-navbar';
@@ -14,6 +14,9 @@ import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { Home, Zap, DollarSign, MessageCircle, Building, Users, Star, Clock, TrendingUp } from 'lucide-react';
 import { useAuth } from './hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
+
+// Import notification test utility (available in console)
+// import './utils/testNotificationGeneration'; // Commented out to prevent interference with auth
 
 // Import Real Auth Pages
 import { LoginPage } from './components/auth/LoginPage';
@@ -299,6 +302,7 @@ const LandingPage = () => {
 function App() {
   // Chatbot position state - can be changed dynamically
   const [chatbotPosition, setChatbotPosition] = useState<'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'>('bottom-right');
+  
   
   return (
     <ErrorBoundary>
