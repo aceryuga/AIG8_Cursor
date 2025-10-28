@@ -1,0 +1,26 @@
+# Deploy the updated reconcile-payments Edge Function
+
+## Option 1: Using Supabase CLI
+cd /Users/mayankshah/Desktop/AIG8/Cursor/AIG8_Cursor\ copy\ 3
+supabase functions deploy reconcile-payments
+
+## Option 2: Using deploy script
+cd /Users/mayankshah/Desktop/AIG8/Cursor/AIG8_Cursor\ copy\ 3
+bash deploy-edge-function.sh reconcile-payments
+
+## After deployment:
+1. Go to http://localhost:5173 (or your local app URL)
+2. Login with: rajesh.kumar@example.com / demo123
+3. Navigate to AI Reconciliation page
+4. Upload test-bank-statement-comprehensive.csv
+5. Watch the console logs for detailed debugging info
+6. Check Supabase Edge Function logs at:
+   https://supabase.com/dashboard/project/xsoyzbanlgxoijrweemz/logs/edge-functions
+
+## Key logs to watch for:
+- [reconcile-payments] Filtered payments count: X
+- [reconcile-payments] User ID: ...
+- [reconcile-payments] Sample filtered payment: ...
+
+This will reveal exactly why it's failing!
+

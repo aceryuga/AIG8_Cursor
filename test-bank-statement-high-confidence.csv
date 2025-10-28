@@ -1,0 +1,4 @@
+Date,Description,Reference,Debit,Credit,Balance
+2025-10-28,Payment from Arjun Kumar for Rent at AI Reconcile Test Property,REF-EXACT-001,,5000.00,100000.00
+2025-10-28,NEFT Transfer from Arjun Kumar,REF-EXACT-001-DUP,,5000.00,95000.00
+
