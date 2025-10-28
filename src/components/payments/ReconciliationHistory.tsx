@@ -208,10 +208,20 @@ const ReconciliationHistory: React.FC = () => {
         icon: <RefreshCw size={14} className="animate-spin" />,
         label: 'Processing'
       },
+      saved: {
+        color: 'text-purple-600 bg-purple-100 bg-opacity-20',
+        icon: <Clock size={14} />,
+        label: 'Saved'
+      },
       failed: {
         color: 'text-red-600 bg-red-100 bg-opacity-20',
         icon: <X size={14} />,
         label: 'Failed'
+      },
+      cancelled: {
+        color: 'text-gray-600 bg-gray-100 bg-opacity-20',
+        icon: <X size={14} />,
+        label: 'Cancelled'
       },
       uploaded: {
         color: 'text-orange-600 bg-orange-100 bg-opacity-20',
@@ -299,7 +309,7 @@ const ReconciliationHistory: React.FC = () => {
             Payments
           </Link>
           <span className="text-glass-muted">/</span>
-          <Link to="/payments/ai-reconciliation" className="text-glass-muted hover:text-glass">
+          <Link to="/payments/reconciliation" className="text-glass-muted hover:text-glass">
             AI Reconciliation
           </Link>
           <span className="text-glass-muted">/</span>
@@ -451,14 +461,14 @@ const ReconciliationHistory: React.FC = () => {
                       </td>
                       <td className="p-4">
                         <div className="flex items-center justify-end gap-2">
-                          {session.processing_status === 'completed' && (
+                          {(session.processing_status === 'completed' || session.processing_status === 'saved') && (
                             <>
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleViewSession(session.id)}
                                 className="flex items-center gap-1"
-                                title="View Details"
+                                title={session.processing_status === 'saved' ? 'Continue Session' : 'View Details'}
                               >
                                 <Eye size={14} />
                               </Button>

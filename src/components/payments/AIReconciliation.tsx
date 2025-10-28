@@ -19,7 +19,11 @@ import {
   X,
   ThumbsUp,
   ThumbsDown,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Info,
+  Search,
+  Filter,
+  UserX
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { NotificationBell } from '../ui/NotificationBell';
@@ -109,6 +113,15 @@ const AIReconciliation: React.FC = () => {
   const [selectedReconciliationIds, setSelectedReconciliationIds] = useState<Set<string>>(new Set());
   const [isFinishing, setIsFinishing] = useState(false);
   
+  // UI enhancement states
+  const [showMatchReasons, setShowMatchReasons] = useState<string | null>(null);
+  const [showFinalizeModal, setShowFinalizeModal] = useState(false);
+  const [showTerminateModal, setShowTerminateModal] = useState(false);
+  const [searchFilter, setSearchFilter] = useState('');
+  const [propertyFilter, setPropertyFilter] = useState('all');
+  const [isReadOnly, setIsReadOnly] = useState(false);
+  const [isTerminating, setIsTerminating] = useState(false);
+  
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -116,10 +129,10 @@ const AIReconciliation: React.FC = () => {
   // Load session from URL if present
   useEffect(() => {
     const sessionIdFromUrl = searchParams.get('session');
-    if (sessionIdFromUrl) {
+    if (sessionIdFromUrl && user) {
       loadExistingSession(sessionIdFromUrl);
     }
-  }, [searchParams]);
+  }, [searchParams, user]);
 
   /**
    * Load an existing session
@@ -144,6 +157,9 @@ const AIReconciliation: React.FC = () => {
       if (sessionError || !session) {
         throw new Error('Session not found');
       }
+
+      // Check if session is finalized (read-only mode)
+      setIsReadOnly(session.processing_status === 'completed');
 
       // Set summary
       setReconciliationSummary({
@@ -304,17 +320,46 @@ const AIReconciliation: React.FC = () => {
           context: reconcileError.context,
           name: reconcileError.name
         });
-        throw new Error(`Reconciliation failed: ${reconcileError.message || JSON.stringify(reconcileError)}`);
+        
+        // Provide user-friendly error messages
+        let userMessage = 'Reconciliation failed: ';
+        if (reconcileError.message?.includes('non-2xx status code')) {
+          userMessage += 'The matching process encountered an error. This could be due to:\n' +
+                        '• No unreconciled payments found in your account\n' +
+                        '• Database connection issue\n' +
+                        '• Invalid bank statement format\n\n' +
+                        'Please try again or contact support if the issue persists.';
+        } else if (reconcileError.message?.includes('timeout')) {
+          userMessage += 'The request took too long. Please try with a smaller bank statement file.';
+        } else if (reconcileError.message?.includes('authentication') || reconcileError.message?.includes('unauthorized')) {
+          userMessage += 'Session expired. Please refresh the page and try again.';
+        } else {
+          userMessage += reconcileError.message || 'An unexpected error occurred. Please try again.';
+        }
+        
+        throw new Error(userMessage);
       }
       
       if (reconcileData && !reconcileData.success) {
         console.error('Reconcile failed with error:', reconcileData.error);
-        throw new Error(reconcileData.error || 'Reconciliation failed');
+        const errorMessage = reconcileData.error || 'Reconciliation failed';
+        
+        // Make error messages more user-friendly
+        let userMessage = errorMessage;
+        if (errorMessage.includes('No unreconciled payments found')) {
+          userMessage = 'No unreconciled payments found. All your payments appear to be already reconciled.';
+        } else if (errorMessage.includes('No bank transactions found')) {
+          userMessage = 'No transactions found in the bank statement for this session. Please ensure the file was parsed correctly.';
+        } else if (errorMessage.includes('Failed to fetch payments')) {
+          userMessage = 'Unable to load your payment records. Please refresh the page and try again.';
+        }
+        
+        throw new Error(userMessage);
       }
 
       if (!reconcileData?.success) {
         console.error('Reconcile failed:', reconcileData);
-        throw new Error(reconcileData?.error || 'Failed to reconcile payments');
+        throw new Error(reconcileData?.error || 'Failed to reconcile payments. Please try again.');
       }
 
       console.log('Reconciliation summary:', reconcileData.summary);
@@ -642,27 +687,35 @@ const AIReconciliation: React.FC = () => {
   };
 
   /**
-   * Finalize reconciliation - mark all confirmed matches as reconciled
+   * Show finalize confirmation modal
+   */
+  const openFinalizeModal = () => {
+    setShowFinalizeModal(true);
+  };
+
+  /**
+   * Finalize reconciliation - mark auto-matched as reconciled
    */
   const handleFinalize = async () => {
     if (!sessionId || !user) return;
 
     setIsFinishing(true);
     try {
-      // Get all confirmed/manually linked reconciliations
-      const confirmedStatuses = ['confirmed', 'definite_match', 'manually_linked'];
-      const confirmedRecs = reconciliations.filter(r => confirmedStatuses.includes(r.match_status));
+      // Get auto-matched reconciliations (high_confidence and definite_match)
+      const autoMatchedStatuses = ['definite_match', 'high_confidence'];
+      const autoMatchedRecs = reconciliations.filter(r => autoMatchedStatuses.includes(r.match_status));
 
-      if (confirmedRecs.length === 0) {
-        toast.error('No confirmed matches to finalize');
+      if (autoMatchedRecs.length === 0) {
+        toast.error('No auto-matched payments to finalize');
         setIsFinishing(false);
+        setShowFinalizeModal(false);
         return;
       }
 
-      const paymentIds = confirmedRecs.map(r => r.payment_id);
-      const reconciliationIds = confirmedRecs.map(r => r.id);
+      const paymentIds = autoMatchedRecs.map(r => r.payment_id);
+      const reconciliationIds = autoMatchedRecs.map(r => r.id);
 
-      // Update payments table
+      // Update payments table - mark as reconciled
       const { error: paymentsError } = await supabase
         .from('payments')
         .update({
@@ -673,7 +726,7 @@ const AIReconciliation: React.FC = () => {
 
       if (paymentsError) throw paymentsError;
 
-      // Update reconciliation records
+      // Update reconciliation records - mark as reconciled
       const { error: recsError } = await supabase
         .from('payment_reconciliations')
         .update({ is_reconciled: true })
@@ -681,23 +734,81 @@ const AIReconciliation: React.FC = () => {
 
       if (recsError) throw recsError;
 
-      // Update session status
-      const { error: sessionError } = await supabase
-        .from('reconciliation_sessions')
-        .update({ processing_status: 'completed' })
-        .eq('id', sessionId);
+      // Check if there are any review required items
+      const reviewRequiredCount = reconciliations.filter(r => r.match_status === 'review_required').length;
 
-      if (sessionError) throw sessionError;
+      // Only mark session as completed if no review required items
+      if (reviewRequiredCount === 0) {
+        const { error: sessionError } = await supabase
+          .from('reconciliation_sessions')
+          .update({ processing_status: 'completed' })
+          .eq('id', sessionId);
 
-      toast.success(`${confirmedRecs.length} payment${confirmedRecs.length !== 1 ? 's' : ''} finalized successfully!`);
+        if (sessionError) throw sessionError;
+      }
+
+      toast.success(`${autoMatchedRecs.length} payment${autoMatchedRecs.length !== 1 ? 's' : ''} finalized successfully!`);
       
-      // Refresh to show updated data
-      await loadReconciliationResults(sessionId);
+      setShowFinalizeModal(false);
       setIsFinishing(false);
+      
+      // Navigate to history page
+      navigate('/payments/reconciliation/history');
     } catch (error) {
       console.error('Finalization error:', error);
       toast.error('Failed to finalize reconciliation');
       setIsFinishing(false);
+      setShowFinalizeModal(false);
+    }
+  };
+
+  /**
+   * Terminate reconciliation - delete bank transactions and reconciliations, mark as cancelled
+   */
+  const handleTerminate = async () => {
+    if (!sessionId || !user) return;
+
+    setIsTerminating(true);
+    try {
+      // Delete payment reconciliations for this session
+      const { error: recsError } = await supabase
+        .from('payment_reconciliations')
+        .delete()
+        .eq('session_id', sessionId);
+
+      if (recsError) throw recsError;
+
+      // Delete bank transactions for this session
+      const { error: bankError } = await supabase
+        .from('bank_transactions')
+        .delete()
+        .eq('session_id', sessionId);
+
+      if (bankError) throw bankError;
+
+      // Update session status to cancelled
+      const { error: sessionError } = await supabase
+        .from('reconciliation_sessions')
+        .update({ 
+          processing_status: 'cancelled',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', sessionId);
+
+      if (sessionError) throw sessionError;
+
+      toast.success('Session terminated successfully');
+      
+      setShowTerminateModal(false);
+      setIsTerminating(false);
+      
+      // Navigate to history page
+      navigate('/payments/reconciliation/history');
+    } catch (error) {
+      console.error('Termination error:', error);
+      toast.error('Failed to terminate session');
+      setIsTerminating(false);
+      setShowTerminateModal(false);
     }
   };
 
@@ -754,13 +865,132 @@ const AIReconciliation: React.FC = () => {
     }
   };
 
-  // Filter reconciliations based on active tab
-  const filteredReconciliations = reconciliations.filter(rec => {
-    if (activeTab === 'all') return true;
-    if (activeTab === 'auto_matched') {
-      return ['definite_match', 'high_confidence', 'confirmed', 'manually_linked'].includes(rec.match_status);
+  /**
+   * Check if tenant names are completely different (not just partial match)
+   */
+  const hasTenantMismatch = (rec: PaymentReconciliation): boolean => {
+    const paymentTenant = rec.payments?.leases?.tenants?.name?.toLowerCase() || '';
+    const bankDesc = rec.bank_transactions?.description?.toLowerCase() || '';
+    
+    if (!paymentTenant || !bankDesc || !rec.bank_transaction_id) return false;
+    
+    // Extract potential tenant name from bank description
+    const tenantWords = paymentTenant.split(' ');
+    const hasMatch = tenantWords.some(word => 
+      word.length > 2 && bankDesc.includes(word)
+    );
+    
+    // If no words match at all, it's a complete mismatch
+    return !hasMatch;
+  };
+
+  /**
+   * Get user-friendly match reasons
+   */
+  const getMatchReasons = (rec: PaymentReconciliation): { friendly: string; detailed: string[] } => {
+    const paymentAmount = rec.payments?.payment_amount || 0;
+    const bankAmount = rec.bank_transactions?.amount || 0;
+    const amountDiff = Math.abs(paymentAmount - bankAmount);
+    
+    const paymentDate = new Date(rec.payments?.payment_date || '');
+    const bankDate = new Date(rec.bank_transactions?.transaction_date || '');
+    const daysDiff = Math.abs(Math.floor((bankDate.getTime() - paymentDate.getTime()) / (1000 * 60 * 60 * 24)));
+    
+    const paymentRef = rec.payments?.reference || '';
+    const bankRef = rec.bank_transactions?.reference_number || '';
+    const bankDesc = rec.bank_transactions?.description || '';
+    
+    const paymentTenant = rec.payments?.leases?.tenants?.name || '';
+    
+    const detailed: string[] = [];
+    let friendly = '';
+    
+    // Amount matching
+    if (amountDiff === 0) {
+      detailed.push('✓ Amount: Exact match');
+    } else if (amountDiff <= 1) {
+      detailed.push(`✓ Amount: Within ₹1 difference`);
+    } else if (amountDiff <= 10) {
+      detailed.push(`⚠ Amount: Within ₹10 difference`);
+    } else {
+      detailed.push(`✗ Amount: Significant mismatch (₹${Math.abs(paymentAmount - bankAmount)} difference)`);
     }
-    return rec.match_status === activeTab;
+    
+    // Date matching
+    if (daysDiff === 0) {
+      detailed.push('✓ Date: Same day');
+    } else if (daysDiff <= 2) {
+      detailed.push(`✓ Date: ${daysDiff} day${daysDiff > 1 ? 's' : ''} apart`);
+    } else if (daysDiff <= 5) {
+      detailed.push(`⚠ Date: ${daysDiff} days apart`);
+    } else if (daysDiff <= 7) {
+      detailed.push(`⚠ Date: ${daysDiff} days apart (edge of tolerance)`);
+    } else {
+      detailed.push(`✗ Date: ${daysDiff} days apart (beyond tolerance)`);
+    }
+    
+    // Reference matching
+    if (paymentRef && bankRef && paymentRef.toLowerCase() === bankRef.toLowerCase()) {
+      detailed.push('✓ Reference: Exact match');
+    } else if (paymentRef && (bankRef.toLowerCase().includes(paymentRef.toLowerCase()) || 
+               bankDesc.toLowerCase().includes(paymentRef.toLowerCase()))) {
+      detailed.push('✓ Reference: Partial match found');
+    } else if (!paymentRef) {
+      detailed.push('○ Reference: Payment has no reference');
+    } else {
+      detailed.push('✗ Reference: No match found');
+    }
+    
+    // Tenant matching
+    const tenantWords = paymentTenant.toLowerCase().split(' ');
+    const fullMatch = bankDesc.toLowerCase().includes(paymentTenant.toLowerCase());
+    const partialMatch = tenantWords.some(word => word.length > 2 && bankDesc.toLowerCase().includes(word));
+    
+    if (fullMatch) {
+      detailed.push('✓ Tenant: Full name match');
+    } else if (partialMatch) {
+      detailed.push('✓ Tenant: Partial name match');
+    } else {
+      detailed.push('⚠ Tenant: Name not found in description');
+    }
+    
+    // Generate friendly summary
+    if (rec.confidence_score >= 90) {
+      friendly = 'High confidence match with strong signals across multiple factors.';
+    } else if (rec.confidence_score >= 75) {
+      friendly = 'Good match with most factors aligning well.';
+    } else if (rec.confidence_score >= 50) {
+      friendly = 'Partial match detected. Manual review recommended.';
+    } else {
+      friendly = 'Low confidence match or no suitable match found.';
+    }
+    
+    return { friendly, detailed };
+  };
+
+  // Filter reconciliations based on active tab, search, and property filter
+  const filteredReconciliations = reconciliations.filter(rec => {
+    // Tab filter
+    let matchesTab = true;
+    if (activeTab !== 'all') {
+      if (activeTab === 'auto_matched') {
+        matchesTab = ['definite_match', 'high_confidence', 'confirmed', 'manually_linked'].includes(rec.match_status);
+      } else {
+        matchesTab = rec.match_status === activeTab;
+      }
+    }
+
+    // Search filter
+    const matchesSearch = !searchFilter || 
+      rec.payments?.leases?.tenants?.name?.toLowerCase().includes(searchFilter.toLowerCase()) ||
+      rec.bank_transactions?.description?.toLowerCase().includes(searchFilter.toLowerCase()) ||
+      rec.payments?.reference?.toLowerCase().includes(searchFilter.toLowerCase());
+
+    // Property filter
+    const matchesProperty = propertyFilter === 'all' || 
+      rec.payments?.leases?.properties?.name === propertyFilter;
+
+    return matchesTab && matchesSearch && matchesProperty;
   });
 
   // Calculate summary counts
@@ -772,6 +1002,11 @@ const AIReconciliation: React.FC = () => {
     unmatched: reconciliations.filter(r => r.match_status === 'unmatched' || r.match_status === 'rejected').length,
     total: reconciliations.length
   };
+
+  // Get unique properties for filter
+  const uniqueProperties = Array.from(
+    new Set(reconciliations.map(r => r.payments?.leases?.properties?.name).filter(Boolean))
+  );
 
   const exportReconciliationReport = () => {
     const headers = ['Payment Date', 'Bank Date', 'Property', 'Tenant', 'Payment Amount', 'Bank Amount', 'Bank Description', 'Status', 'Confidence', 'Matching Reasons'];
@@ -1132,6 +1367,40 @@ const AIReconciliation: React.FC = () => {
                   <Download size={16} />
                   Export Report
                 </Button>
+                {/* Save for Later and Terminate buttons - only show if not finalized */}
+                {!isReadOnly && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={async () => {
+                        if (sessionId) {
+                          await supabase
+                            .from('reconciliation_sessions')
+                            .update({ 
+                              processing_status: 'saved',
+                              updated_at: new Date().toISOString()
+                            })
+                            .eq('id', sessionId);
+                          toast.success('Session saved. You can continue later.');
+                        }
+                        navigate('/payments/reconciliation/history');
+                      }}
+                      className="flex items-center gap-2"
+                    >
+                      <ArrowLeft size={16} />
+                      Save for Later
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowTerminateModal(true)}
+                      className="flex items-center gap-2 text-red-600 hover:text-red-700 border-red-300 hover:border-red-400"
+                    >
+                      <X size={16} />
+                      Terminate
+                    </Button>
+                  </>
+                )}
+                
                 <Button
                   variant="outline"
                   onClick={() => {
@@ -1150,23 +1419,60 @@ const AIReconciliation: React.FC = () => {
               </div>
 
               {/* Finalize Button */}
-              <Button
-                onClick={handleFinalize}
-                disabled={isFinishing || summaryFromReconciliations.auto_matched === 0}
-                className="flex items-center gap-2"
-              >
-                {isFinishing ? (
-                  <>
-                    <RefreshCw size={16} className="animate-spin" />
-                    Finalizing...
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle size={16} />
-                    Finalize Reconciliation
-                  </>
-                )}
-              </Button>
+              {!isReadOnly && (
+                <Button
+                  onClick={openFinalizeModal}
+                  disabled={isFinishing || summaryFromReconciliations.auto_matched === 0}
+                  className="flex items-center gap-2"
+                >
+                  <CheckCircle size={16} />
+                  Finalize Reconciliation
+                </Button>
+              )}
+              {isReadOnly && (
+                <div className="px-4 py-2 glass rounded-lg flex items-center gap-2">
+                  <CheckCircle size={16} className="text-green-700" />
+                  <span className="text-sm font-medium text-green-700">Finalized</span>
+                </div>
+              )}
+            </div>
+
+            {/* Search and Filters */}
+            <div className="glass-card rounded-xl p-4 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Search */}
+                <div>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-glass-muted" size={18} />
+                    <input
+                      type="text"
+                      value={searchFilter}
+                      onChange={(e) => setSearchFilter(e.target.value)}
+                      placeholder="Search by tenant, description, or reference..."
+                      className="w-full pl-10 pr-4 py-2 glass rounded-lg border border-white border-opacity-20 text-glass placeholder-glass-muted focus:outline-none focus:ring-2 focus:ring-green-800 focus:ring-opacity-50"
+                    />
+                  </div>
+                </div>
+
+                {/* Property Filter */}
+                <div>
+                  <div className="relative">
+                    <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-glass-muted" size={18} />
+                    <select
+                      value={propertyFilter}
+                      onChange={(e) => setPropertyFilter(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 glass rounded-lg border border-white border-opacity-20 text-glass focus:outline-none focus:ring-2 focus:ring-green-800 focus:ring-opacity-50 appearance-none cursor-pointer"
+                    >
+                      <option value="all">All Properties</option>
+                      {uniqueProperties.map((property) => (
+                        <option key={property} value={property}>
+                          {property}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Tabs */}
@@ -1250,7 +1556,19 @@ const AIReconciliation: React.FC = () => {
                             {rec.payments?.leases?.properties?.name || '-'}
                           </td>
                           <td className="p-4 text-sm text-glass">
-                            {rec.payments?.leases?.tenants?.name || '-'}
+                            <div className="flex items-center gap-2">
+                              {rec.payments?.leases?.tenants?.name || '-'}
+                              {/* Tenant Mismatch Warning */}
+                              {hasTenantMismatch(rec) && (
+                                <div className="relative group">
+                                  <UserX size={16} className="text-orange-600" />
+                                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-orange-600 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                                    Tenant name not found in bank description
+                                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-1 w-2 h-2 bg-orange-600 rotate-45"></div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </td>
                           <td className="p-4 text-sm text-glass font-medium">
                             <div className="flex flex-col gap-1">
@@ -1269,9 +1587,50 @@ const AIReconciliation: React.FC = () => {
                           </td>
                           <td className="p-4">
                             {rec.confidence_score > 0 ? (
-                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getConfidenceColor(rec.confidence_score)}`}>
-                                {rec.confidence_score}%
-                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getConfidenceColor(rec.confidence_score)}`}>
+                                  {rec.confidence_score}%
+                                </span>
+                                {/* Match Reasons Info Icon */}
+                                <div className="relative group">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setShowMatchReasons(showMatchReasons === rec.id ? null : rec.id);
+                                    }}
+                                    className="p-1 hover:bg-white hover:bg-opacity-10 rounded transition-all"
+                                  >
+                                    <Info size={14} className="text-glass-muted hover:text-glass" />
+                                  </button>
+                                  {showMatchReasons === rec.id && (
+                                    <div className="absolute right-0 top-full mt-2 w-80 glass-card rounded-lg shadow-xl z-50 p-4">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setShowMatchReasons(null);
+                                        }}
+                                        className="absolute top-2 right-2 p-1 hover:bg-white hover:bg-opacity-10 rounded transition-all"
+                                      >
+                                        <X size={14} className="text-glass" />
+                                      </button>
+                                      <h4 className="text-sm font-semibold text-glass mb-2">Match Analysis</h4>
+                                      <p className="text-xs text-glass-muted mb-3 pr-6">
+                                        {getMatchReasons(rec).friendly}
+                                      </p>
+                                      <div className="border-t border-white border-opacity-20 pt-3">
+                                        <h5 className="text-xs font-medium text-glass mb-2">Detailed Breakdown:</h5>
+                                        <div className="space-y-1">
+                                          {getMatchReasons(rec).detailed.map((reason, idx) => (
+                                            <p key={idx} className="text-xs text-glass-muted font-mono">
+                                              {reason}
+                                            </p>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                             ) : (
                               <span className="text-glass-muted text-sm">-</span>
                             )}
@@ -1284,86 +1643,92 @@ const AIReconciliation: React.FC = () => {
                           </td>
                           <td className="p-4">
                             <div className="flex gap-2">
-                              {/* Review Required Actions */}
-                              {rec.match_status === 'review_required' && (
+                              {!isReadOnly ? (
                                 <>
-                                  <Button 
-                                    variant="outline" 
-                                    size="sm"
-                                    onClick={() => handleConfirmMatch(rec)}
-                                    className="flex items-center gap-1"
-                                  >
-                                    <ThumbsUp size={14} />
-                                    Confirm
-                                  </Button>
-                                  <Button 
-                                    variant="outline" 
-                                    size="sm"
-                                    onClick={() => handleRejectMatch(rec)}
-                                    className="flex items-center gap-1 text-red-600 hover:text-red-700"
-                                  >
-                                    <ThumbsDown size={14} />
-                                    Reject
-                                  </Button>
-                                  <Button 
-                                    variant="outline" 
-                                    size="sm"
-                                    onClick={() => openManualLinkModal(rec)}
-                                    className="flex items-center gap-1"
-                                  >
-                                    <LinkIcon size={14} />
-                                    Relink
-                                  </Button>
+                                  {/* Review Required Actions */}
+                                  {rec.match_status === 'review_required' && (
+                                    <>
+                                      <Button 
+                                        variant="outline" 
+                                        size="sm"
+                                        onClick={() => handleConfirmMatch(rec)}
+                                        className="flex items-center gap-1"
+                                      >
+                                        <ThumbsUp size={14} />
+                                        Confirm
+                                      </Button>
+                                      <Button 
+                                        variant="outline" 
+                                        size="sm"
+                                        onClick={() => handleRejectMatch(rec)}
+                                        className="flex items-center gap-1 text-red-600 hover:text-red-700"
+                                      >
+                                        <ThumbsDown size={14} />
+                                        Reject
+                                      </Button>
+                                      <Button 
+                                        variant="outline" 
+                                        size="sm"
+                                        onClick={() => openManualLinkModal(rec)}
+                                        className="flex items-center gap-1"
+                                      >
+                                        <LinkIcon size={14} />
+                                        Relink
+                                      </Button>
+                                    </>
+                                  )}
+
+                                  {/* High Confidence Actions */}
+                                  {(rec.match_status === 'high_confidence' || rec.match_status === 'definite_match') && (
+                                    <>
+                                      <Button 
+                                        variant="outline" 
+                                        size="sm"
+                                        onClick={() => handleConfirmMatch(rec)}
+                                        className="flex items-center gap-1"
+                                      >
+                                        <ThumbsUp size={14} />
+                                        Confirm
+                                      </Button>
+                                      <Button 
+                                        variant="ghost" 
+                                        size="sm"
+                                        onClick={() => handleRejectMatch(rec)}
+                                        className="flex items-center gap-1 text-red-600"
+                                      >
+                                        <ThumbsDown size={14} />
+                                      </Button>
+                                    </>
+                                  )}
+
+                                  {/* Unmatched/Rejected Actions */}
+                                  {(rec.match_status === 'unmatched' || rec.match_status === 'rejected') && (
+                                    <Button 
+                                      variant="outline" 
+                                      size="sm"
+                                      onClick={() => openManualLinkModal(rec)}
+                                      className="flex items-center gap-1"
+                                    >
+                                      <LinkIcon size={14} />
+                                      Manual Link
+                                    </Button>
+                                  )}
+
+                                  {/* Confirmed/Manually Linked - View Only */}
+                                  {(rec.match_status === 'confirmed' || rec.match_status === 'manually_linked') && (
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm"
+                                      className="flex items-center gap-1 text-green-700"
+                                      disabled
+                                    >
+                                      <CheckCircle size={14} />
+                                      Confirmed
+                                    </Button>
+                                  )}
                                 </>
-                              )}
-
-                              {/* High Confidence Actions */}
-                              {(rec.match_status === 'high_confidence' || rec.match_status === 'definite_match') && (
-                                <>
-                                  <Button 
-                                    variant="outline" 
-                                    size="sm"
-                                    onClick={() => handleConfirmMatch(rec)}
-                                    className="flex items-center gap-1"
-                                  >
-                                    <ThumbsUp size={14} />
-                                    Confirm
-                                  </Button>
-                                  <Button 
-                                    variant="ghost" 
-                                    size="sm"
-                                    onClick={() => handleRejectMatch(rec)}
-                                    className="flex items-center gap-1 text-red-600"
-                                  >
-                                    <ThumbsDown size={14} />
-                                  </Button>
-                                </>
-                              )}
-
-                              {/* Unmatched/Rejected Actions */}
-                              {(rec.match_status === 'unmatched' || rec.match_status === 'rejected') && (
-                                <Button 
-                                  variant="outline" 
-                                  size="sm"
-                                  onClick={() => openManualLinkModal(rec)}
-                                  className="flex items-center gap-1"
-                                >
-                                  <LinkIcon size={14} />
-                                  Manual Link
-                                </Button>
-                              )}
-
-                              {/* Confirmed/Manually Linked - View Only */}
-                              {(rec.match_status === 'confirmed' || rec.match_status === 'manually_linked') && (
-                                <Button 
-                                  variant="ghost" 
-                                  size="sm"
-                                  className="flex items-center gap-1 text-green-700"
-                                  disabled
-                                >
-                                  <CheckCircle size={14} />
-                                  Confirmed
-                                </Button>
+                              ) : (
+                                <span className="text-xs text-glass-muted">View Only</span>
                               )}
                             </div>
                           </td>
@@ -1510,6 +1875,193 @@ const AIReconciliation: React.FC = () => {
                   Create Link
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Finalize Confirmation Modal */}
+      {showFinalizeModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="glass-card rounded-xl max-w-lg w-full">
+            <div className="p-6 border-b border-white border-opacity-20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-orange-100 bg-opacity-20 rounded-lg flex items-center justify-center">
+                    <AlertTriangle className="w-6 h-6 text-orange-600" />
+                  </div>
+                  <h2 className="text-xl font-semibold text-glass">
+                    Finalize Reconciliation
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setShowFinalizeModal(false)}
+                  className="p-2 hover:bg-white hover:bg-opacity-10 rounded-lg transition-all"
+                  disabled={isFinishing}
+                >
+                  <X size={20} className="text-glass" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="glass rounded-lg p-4">
+                <h3 className="text-sm font-semibold text-glass mb-3">This action will:</h3>
+                <ul className="space-y-2 text-sm text-glass-muted">
+                  <li className="flex items-start gap-2">
+                    <CheckCircle size={16} className="text-green-700 mt-0.5 flex-shrink-0" />
+                    <span>
+                      Mark <strong className="text-glass">
+                        {reconciliations.filter(r => ['definite_match', 'high_confidence'].includes(r.match_status)).length} auto-matched payments
+                      </strong> as reconciled
+                    </span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle size={16} className="text-green-700 mt-0.5 flex-shrink-0" />
+                    <span>Update payment records with reconciliation date</span>
+                  </li>
+                  {reconciliations.filter(r => r.match_status === 'review_required').length === 0 ? (
+                    <li className="flex items-start gap-2">
+                      <CheckCircle size={16} className="text-green-700 mt-0.5 flex-shrink-0" />
+                      <span>Mark this session as <strong className="text-glass">completed</strong></span>
+                    </li>
+                  ) : (
+                    <li className="flex items-start gap-2">
+                      <AlertTriangle size={16} className="text-orange-600 mt-0.5 flex-shrink-0" />
+                      <span>
+                        <strong className="text-orange-600">
+                          {reconciliations.filter(r => r.match_status === 'review_required').length} payments require review
+                        </strong>
+                        <br />
+                        Session will remain active until all are reviewed
+                      </span>
+                    </li>
+                  )}
+                </ul>
+              </div>
+
+              <div className="bg-orange-100 bg-opacity-10 border border-orange-600 border-opacity-30 rounded-lg p-4">
+                <div className="flex gap-3">
+                  <AlertTriangle size={20} className="text-orange-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm">
+                    <p className="text-orange-600 font-medium mb-1">Important:</p>
+                    <p className="text-glass-muted">
+                      After finalization, you will be redirected to the history page. 
+                      {reconciliations.filter(r => r.match_status === 'review_required').length === 0 
+                        ? ' This session will become read-only.'
+                        : ' Complete remaining reviews to finalize the session.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-white border-opacity-20 flex gap-3 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setShowFinalizeModal(false)}
+                disabled={isFinishing}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleFinalize}
+                disabled={isFinishing}
+                className="flex items-center gap-2"
+              >
+                {isFinishing ? (
+                  <>
+                    <RefreshCw size={16} className="animate-spin" />
+                    Finalizing...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle size={16} />
+                    Confirm Finalization
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Terminate Confirmation Modal */}
+      {showTerminateModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="glass-card rounded-xl max-w-lg w-full">
+            <div className="p-6 border-b border-white border-opacity-20">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-red-100 bg-opacity-20 rounded-lg flex items-center justify-center">
+                    <AlertTriangle className="w-6 h-6 text-red-600" />
+                  </div>
+                  <h2 className="text-xl font-semibold text-glass">
+                    Terminate Session
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setShowTerminateModal(false)}
+                  className="p-2 hover:bg-white hover:bg-opacity-10 rounded-lg transition-all"
+                  disabled={isTerminating}
+                >
+                  <X size={20} className="text-glass" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="bg-red-100 bg-opacity-10 border border-red-600 border-opacity-30 rounded-lg p-4">
+                <div className="flex gap-3">
+                  <AlertTriangle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm space-y-2">
+                    <p className="text-red-600 font-semibold">Warning: This action cannot be undone!</p>
+                    <p className="text-glass-muted">
+                      Terminating this session will:
+                    </p>
+                    <ul className="list-disc list-inside text-glass-muted space-y-1 ml-2">
+                      <li>Delete all bank transactions uploaded in this session</li>
+                      <li>Delete all reconciliation matches</li>
+                      <li>Mark this session as cancelled</li>
+                      <li>Allow you to upload the same file again without duplicates</li>
+                    </ul>
+                    <p className="text-red-600 font-medium mt-3">
+                      No payments will be marked as reconciled.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-sm text-glass-muted">
+                Are you sure you want to terminate this reconciliation session?
+              </p>
+            </div>
+
+            <div className="p-6 border-t border-white border-opacity-20 flex justify-end gap-3">
+              <Button
+                variant="outline"
+                onClick={() => setShowTerminateModal(false)}
+                disabled={isTerminating}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleTerminate}
+                disabled={isTerminating}
+                className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white"
+              >
+                {isTerminating ? (
+                  <>
+                    <RefreshCw size={16} className="animate-spin" />
+                    Terminating...
+                  </>
+                ) : (
+                  <>
+                    <X size={16} />
+                    Terminate Session
+                  </>
+                )}
+              </Button>
             </div>
           </div>
         </div>

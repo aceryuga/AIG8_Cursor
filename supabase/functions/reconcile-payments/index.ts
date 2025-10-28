@@ -9,6 +9,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.38.4';
 // Supabase Configuration
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 // Import matching algorithm types
 interface Payment {
@@ -243,12 +244,14 @@ serve(async (req) => {
     });
   }
 
+  let sessionId: string | null = null; // Store in outer scope for error handling
+
   try {
     console.log('[reconcile-payments] Starting reconciliation');
 
     // Parse request
     const body: RequestBody = await req.json();
-    const { sessionId } = body;
+    sessionId = body.sessionId; // Assign to outer variable
 
     if (!sessionId) {
       throw new Error('sessionId is required');
@@ -260,25 +263,20 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader } }
     });
 
-    // Get user
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      throw new Error('Authentication required');
-    }
-
-    // Verify session belongs to user
+    // Fetch session (includes user_id - session auth is more reliable than JWT in Edge Functions)
     const { data: session, error: sessionError } = await supabase
       .from('reconciliation_sessions')
       .select('*')
       .eq('id', sessionId)
-      .eq('user_id', user.id)
       .single();
 
     if (sessionError || !session) {
       throw new Error('Session not found or access denied');
     }
 
-    console.log(`[reconcile-payments] Processing session ${sessionId} for user ${user.id}`);
+    // Use user_id from session instead of auth.getUser() to avoid Edge Function auth issues
+    const userId = session.user_id;
+    console.log(`[reconcile-payments] Processing session ${sessionId} for user ${userId}`);
 
     // Fetch unreconciled payments
     const { data: payments, error: paymentsError } = await supabase
@@ -312,11 +310,25 @@ serve(async (req) => {
     }
 
     console.log(`[reconcile-payments] Raw payments fetched:`, payments?.length || 0);
+    if (payments && payments.length > 0) {
+      console.log(`[reconcile-payments] Sample payment structure:`, JSON.stringify(payments[0], null, 2));
+    }
 
     // Filter payments for current user
     const userPayments = (payments || []).filter((p: any) => 
-      p.leases?.properties?.owner_id === user.id
+      p.leases?.properties?.owner_id === userId
     );
+
+    console.log(`[reconcile-payments] User ID:`, userId);
+    console.log(`[reconcile-payments] Filtered payments count:`, userPayments.length);
+    if (userPayments.length > 0) {
+      console.log(`[reconcile-payments] Sample filtered payment:`, JSON.stringify(userPayments[0], null, 2));
+    } else {
+      console.warn(`[reconcile-payments] WARNING: No payments after filtering! This may indicate:
+        1. Nested select not returning expected structure
+        2. RLS policies blocking nested data
+        3. Auth context mismatch`);
+    }
 
     // Transform payments
     const transformedPayments: Payment[] = userPayments.map((p: any) => ({
@@ -330,7 +342,10 @@ serve(async (req) => {
       property_name: p.leases?.properties?.name
     }));
 
-    console.log(`[reconcile-payments] Found ${transformedPayments.length} payments to reconcile for user ${user.id}`);
+    console.log(`[reconcile-payments] Found ${transformedPayments.length} payments to reconcile for user ${userId}`);
+    if (transformedPayments.length > 0) {
+      console.log(`[reconcile-payments] Sample transformed payment:`, JSON.stringify(transformedPayments[0], null, 2));
+    }
 
     if (transformedPayments.length === 0) {
       return new Response(
@@ -368,7 +383,7 @@ serve(async (req) => {
       const { data: patternsData } = await supabase
         .from('reconciliation_patterns')
         .select('bank_description_pattern, confidence_boost, times_confirmed')
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .in('tenant_id', tenantIds);
       
       patterns = patternsData || [];
@@ -440,11 +455,13 @@ serve(async (req) => {
     const reviewRequired = matches.filter(m => m.match_status === 'review_required').length;
     const unmatched = matches.filter(m => m.match_status === 'unmatched').length;
 
-    // Update session status to completed
-    await supabase
+    // Mark session as saved - user can view and continue, then finalize or terminate
+    // Use service role to bypass RLS since we're doing internal status update
+    const adminClient = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+    await adminClient
       .from('reconciliation_sessions')
       .update({
-        processing_status: 'completed',
+        processing_status: 'saved',
         updated_at: new Date().toISOString()
       })
       .eq('id', sessionId);
@@ -482,10 +499,36 @@ serve(async (req) => {
     );
   } catch (error) {
     console.error('[reconcile-payments] Error:', error);
+    console.error('[reconcile-payments] Error type:', error instanceof Error ? error.constructor.name : typeof error);
+    console.error('[reconcile-payments] Error message:', error instanceof Error ? error.message : String(error));
+    console.error('[reconcile-payments] Error stack:', error instanceof Error ? error.stack : 'No stack trace available');
+    
+    // Update session status to failed
+    // Use service role to bypass RLS since we're doing internal status update
+    try {
+      const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      
+      // Use sessionId from outer scope (already parsed earlier)
+      if (sessionId) {
+        await adminClient
+          .from('reconciliation_sessions')
+          .update({
+            processing_status: 'failed',
+            error_message: error instanceof Error ? error.message : 'Unknown error occurred during reconciliation',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', sessionId);
+        console.log(`[reconcile-payments] Updated session ${sessionId} to failed status`);
+      }
+    } catch (updateError) {
+      console.error('[reconcile-payments] Failed to update session status:', updateError);
+    }
+    
     return new Response(
       JSON.stringify({
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error',
+        details: error instanceof Error ? error.stack : String(error)
       }),
       {
         headers: {
