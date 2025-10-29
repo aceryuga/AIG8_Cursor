@@ -64,6 +64,7 @@ export const LoginPage: React.FC = () => {
     if (!validate()) return;
 
     const success = await login(sanitizedForm);
+    
     if (success) {
       // Check if this is a first-time user (you can implement this logic based on your needs)
       //const isFirstTime = !localStorage.getItem('propertypro_onboarded');
@@ -72,7 +73,14 @@ export const LoginPage: React.FC = () => {
       //} else {
       
       // Redirect to the intended destination or dashboard
-      const from = location.state?.from?.pathname || '/dashboard';
+      // Ensure we get a clean path without hash duplicates
+      let from = location.state?.from?.pathname || '/dashboard';
+      
+      // Clean up any malformed paths (e.g., '/auth/login' shouldn't redirect back to login)
+      if (from === '/auth/login' || from.startsWith('/auth/')) {
+        from = '/dashboard';
+      }
+      
       navigate(from, { replace: true });
       //}
     }

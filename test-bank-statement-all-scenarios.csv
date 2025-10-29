@@ -1,0 +1,17 @@
+Date,Description,Amount,Reference Number
+2025-10-28,Rent payment from Arjun Kumar,5000,REF-EXACT-001
+2025-10-28,Payment from P Kumar,6000,PAY-NAME-VAR-001
+2025-10-28,Bank Transfer received RENT-002 from Arjun Kumar,7000,PAYMENT-RENT-002-RECEIVED
+2025-10-28,Transfer from Rohit Sharma for rent,8000,PAY-NAME-MIS-003
+2025-10-28,UPI payment Arjun Kumar,8999,PAY-AMT1-004
+2025-10-30,NEFT Transfer from Arjun Kumar,10000,PAY-DATE2-005
+2025-11-02,Rent Payment Arjun Kumar,11000,PAY-DATE5-006
+2025-10-28,Transfer from Arjun,11992,PAY-AMT10-007
+2025-10-29,Payment Arjun for PARTIAL,13005,PARTIAL-REF-008
+2025-11-10,Rent payment from Arjun Kumar,14000,PAY-DATE-FAR-009
+2025-10-28,Payment from Arjun Kumar,12000,PAY-AMT-BIG-010
+2025-11-15,Different payment,2000,COMPLETELY-DIFFERENT
+2025-10-28,Payment from Arun Kumar,17000,PAY-FUZZY-012
+2025-10-28,Rent payment Arjun Kumar 18000,18000,BANK-REF-NO-PYMNT-014
+2025-10-28,IMPS transfer from Arjun Kumar,19000,PAY-DATE7-013
+

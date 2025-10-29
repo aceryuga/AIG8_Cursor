@@ -1,5 +1,5 @@
 import React from 'react';
-import { Building2 } from 'lucide-react';
+import { Logo } from '../ui/Logo';
 
 interface AuthLayoutProps {
   children: React.ReactNode;
@@ -14,7 +14,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({ children, title, subtitl
         {/* Logo and Brand */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 glass rounded-2xl mb-4 glow">
-            <Building2 className="w-8 h-8 text-green-800" />
+            <Logo size="lg" className="text-green-800" />
           </div>
           <h1 className="text-2xl font-bold text-glass mb-2">PropertyPro</h1>
           <p className="text-glass-muted">Professional Property Management</p>

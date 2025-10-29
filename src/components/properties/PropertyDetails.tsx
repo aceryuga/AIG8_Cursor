@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, Building2, LogOut, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Save, AlertCircle, Image as ImageIcon } from 'lucide-react';
+import { ArrowLeft, MapPin, IndianRupee, User, Phone, Mail, Calendar, FileText, Upload, CreditCard, LogOut, HelpCircle, CreditCard as Edit, Trash2, Download, Eye, CheckCircle, AlertTriangle, Clock, X, Send, MessageCircle, Save, AlertCircle, Image as ImageIcon } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { Logo } from '../ui/Logo';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
@@ -129,13 +130,17 @@ export const PropertyDetails: React.FC = () => {
   
   // Supabase data states
   const [property, setProperty] = useState<Property | null>(null);
+  const [rawPropertyData, setRawPropertyData] = useState<any>(null);
   const [payments, setPayments] = useState<PaymentHistory[]>([]);
   const [rentPayments, setRentPayments] = useState<RentPayment[]>([]);
   const [leaseId, setLeaseId] = useState<string>('');
+  const [dueAmount, setDueAmount] = useState<number>(0);
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [maintenanceRequests, setMaintenanceRequests] = useState<any[]>([]);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [filteredMessages, setFilteredMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [leaseStatus, setLeaseStatus] = useState<any>(null);
   const [paymentForm, setPaymentForm] = useState<PaymentForm>({
     amount: 0,
     date: getCurrentISTDateInput(), // Current date in IST for input
@@ -187,6 +192,38 @@ export const PropertyDetails: React.FC = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  // Helper function to convert HTML to plain text
+  const htmlToText = (html: string): string => {
+    if (!html) return '';
+    // Create a temporary div element to parse HTML
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+    return temp.textContent || temp.innerText || '';
+  };
+
+
+  // Export to CSV
+  const exportToCSV = () => {
+    const csvContent = [
+      ['Date', 'Subject', 'Body'].join(','),
+      ...filteredMessages.map(message => [
+        formatDateDDMMYYYY(message.sent_at),
+        `"${(message.Subject || '').replace(/"/g, '""')}"`,
+        `"${htmlToText(message.message_body || '').replace(/"/g, '""')}"`
+      ].join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `communication-log-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  };
+
   // Fetch property images
   const fetchPropertyImages = async () => {
     if (!property?.id) return;
@@ -206,6 +243,30 @@ export const PropertyDetails: React.FC = () => {
       }
     } catch (err) {
       console.warn('Error fetching property images:', err);
+    }
+  };
+
+  // Fetch messages from messages table
+  const fetchMessages = async () => {
+    if (!property?.id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('Subject, message_body, sent_at')
+        .eq('property_id', property.id)
+        .eq('N8N', 'Pass')
+        .order('sent_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching messages:', error);
+        return;
+      }
+
+      setMessages(data || []);
+      setFilteredMessages(data || []);
+    } catch (error) {
+      console.error('Error fetching messages:', error);
     }
   };
 
@@ -251,7 +312,8 @@ export const PropertyDetails: React.FC = () => {
         lease_id: (payment.leases as any)?.id || '',
         payment_date: payment.payment_date,
         payment_amount: payment.payment_amount,
-        status: payment.status as 'completed' | 'pending' | 'failed'
+        status: payment.status as 'completed' | 'pending' | 'failed',
+        payment_type: payment.payment_type
       }));
       
       setRentPayments(rentPaymentsData);
@@ -278,6 +340,7 @@ export const PropertyDetails: React.FC = () => {
             *,
             leases(
               id,
+              tenant_id,
               monthly_rent,
               security_deposit,
               maintenance_charges,
@@ -305,6 +368,9 @@ export const PropertyDetails: React.FC = () => {
         }
 
         if (data) {
+          // Store raw data for later use
+          setRawPropertyData(data);
+          
           const activeLease = data.leases && data.leases.length > 0 ? 
             data.leases.find((lease: any) => lease.is_active) : null;
           const tenant = activeLease?.tenants || null;
@@ -317,9 +383,12 @@ export const PropertyDetails: React.FC = () => {
           }
 
           // Calculate lease status
-          const leaseStatus = activeLease?.end_date ? 
+          const calculatedLeaseStatus = activeLease?.end_date ? 
             calculateLeaseStatus(activeLease.end_date) : 
             { status: 'active', message: 'No Lease', daysRemaining: 0, priority: 1 };
+          
+          // Store lease status for document alerts
+          setLeaseStatus(calculatedLeaseStatus);
 
           const propertyData: Property = {
             id: data.id,
@@ -370,7 +439,8 @@ export const PropertyDetails: React.FC = () => {
           lease_id: (payment.leases as any)?.id || '',
           payment_date: payment.payment_date,
           payment_amount: payment.payment_amount,
-          status: payment.status as 'completed' | 'pending' | 'failed'
+          status: payment.status as 'completed' | 'pending' | 'failed',
+          payment_type: payment.payment_type
         }));
         
         setRentPayments(rentPaymentsData);
@@ -393,18 +463,6 @@ export const PropertyDetails: React.FC = () => {
           setDocuments([]);
         }
 
-        // Fetch maintenance requests
-        const { data: maintenanceData, error: maintenanceError } = await supabase
-          .from('maintenance_requests')
-          .select('*')
-          .eq('property_id', id)
-          .order('created_at', { ascending: false });
-
-        if (maintenanceError) {
-          console.warn('Error fetching maintenance requests:', maintenanceError);
-        } else {
-          setMaintenanceRequests(maintenanceData || []);
-        }
       } catch (err: any) {
         console.error('Error fetching property:', err);
         setError(err.message || 'Failed to load property details');
@@ -420,8 +478,14 @@ export const PropertyDetails: React.FC = () => {
   useEffect(() => {
     if (property?.id) {
       fetchPropertyImages();
+      fetchMessages();
     }
   }, [property?.id]);
+
+  // Update filtered messages when messages change
+  useEffect(() => {
+    setFilteredMessages(messages);
+  }, [messages]);
 
   // Sync property image with gallery primary image when images change
   useEffect(() => {
@@ -442,6 +506,9 @@ export const PropertyDetails: React.FC = () => {
 
       const rentStatus = calculateRentStatus(propertyWithLease, rentPayments);
       
+      // Update the due amount
+      setDueAmount(rentStatus.amount);
+      
       // Only update if the payment status has actually changed
       if (property.paymentStatus !== rentStatus.status) {
         setProperty(prev => prev ? {
@@ -449,6 +516,9 @@ export const PropertyDetails: React.FC = () => {
           paymentStatus: rentStatus.status
         } : null);
       }
+    } else {
+      // Reset due amount if property is vacant or no lease
+      setDueAmount(0);
     }
   }, [leaseId, rentPayments, property?.id, property?.rent, property?.leaseStart, property?.status]);
 
@@ -1002,18 +1072,14 @@ export const PropertyDetails: React.FC = () => {
     
     setLoading(true);
     try {
-      // Store timestamp in local timezone format to match existing data
+      // Store timestamp in UTC format (timestamptz) for consistent timezone handling
       const now = new Date();
-      // Create timestamp in the same format as existing data (local timezone without Z)
+      const currentTime = now.toISOString(); // UTC timestamp with timezone
+      
+      // Extract date in YYYY-MM-DD format for end_date
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const seconds = String(now.getSeconds()).padStart(2, '0');
-      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
-      
-      const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
       const currentDate = `${year}-${month}-${day}`;
       
       // Soft delete: set active = 'N' and status = 'vacant' with updated_at timestamp
@@ -1022,7 +1088,7 @@ export const PropertyDetails: React.FC = () => {
         .update({ 
           active: 'N',
           status: 'vacant',
-          updated_at: currentTime  // Local timezone timestamp
+          updated_at: currentTime  // UTC timestamp with timezone
         })
         .eq('id', property.id);
 
@@ -1036,7 +1102,7 @@ export const PropertyDetails: React.FC = () => {
         .update({ 
           is_active: false, 
           end_date: currentDate,
-          updated_at: currentTime  // Local timezone timestamp
+          updated_at: currentTime  // UTC timestamp with timezone
         })
         .eq('property_id', property.id)
         .eq('is_active', true);
@@ -1188,8 +1254,8 @@ export const PropertyDetails: React.FC = () => {
     { id: 'gallery', label: 'Gallery' },
     { id: 'payments', label: 'Payment History' },
     { id: 'documents', label: 'Documents' },
-    { id: 'maintenance', label: 'Maintenance' },
-    { id: 'tenant', label: 'Tenant Details' }
+    { id: 'tenant', label: 'Tenant Details' },
+    { id: 'communication', label: 'Communication Log' }
   ];
 
   // Show loading state
@@ -1222,7 +1288,7 @@ export const PropertyDetails: React.FC = () => {
             <div className="flex items-center gap-8">
               <Link to="/dashboard" className="flex items-center gap-3">
                 <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                  <Building2 className="w-5 h-5 text-green-800" />
+                  <Logo size="sm" className="text-green-800" />
                 </div>
                 <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
               </Link>
@@ -1256,9 +1322,6 @@ export const PropertyDetails: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="p-2">
-                    <User size={16} />
-                  </Button>
                   <Button variant="ghost" size="sm" className="p-2">
                     <HelpCircle size={16} />
                   </Button>
@@ -1362,7 +1425,7 @@ export const PropertyDetails: React.FC = () => {
                           type="text"
                           value={editForm.name}
                           onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
-                          icon={<Building2 size={18} />}
+                          icon={<Logo size="sm" className="text-green-800" />}
                           placeholder="Enter property name"
                         />
                       </div>
@@ -1396,6 +1459,11 @@ export const PropertyDetails: React.FC = () => {
                         {currentProperty.paymentStatus}
                       </span>
                     </div>
+                    {(currentProperty.paymentStatus === 'pending' || currentProperty.paymentStatus === 'overdue') && dueAmount > 0 && (
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPaymentStatusColor(currentProperty.paymentStatus)}`}>
+                        ₹{dueAmount.toLocaleString()}
+                      </span>
+                    )}
                     {currentProperty.leaseStatus && currentProperty.leaseStatus.status !== 'active' && (
                       <span className={`px-3 py-1 rounded-full text-sm font-medium border ${getLeaseStatusColor(currentProperty.leaseStatus.status)}`}>
                         {getLeaseStatusIcon(currentProperty.leaseStatus.status)} {currentProperty.leaseStatus.message}
@@ -1737,6 +1805,14 @@ export const PropertyDetails: React.FC = () => {
                       <p className="text-sm text-glass-muted mb-1">
                         {document.type} • {document.size}
                       </p>
+                      {/* Lease Status Alert for Lease Agreements */}
+                      {document.doc_type === 'lease' && leaseStatus && leaseStatus.status !== 'active' && (
+                        <div className="mb-2">
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(leaseStatus.status)}`}>
+                            {getLeaseStatusIcon(leaseStatus.status)} {leaseStatus.message}
+                          </span>
+                        </div>
+                      )}
                       <p className="text-xs text-glass-muted">
                         Uploaded {getRelativeTime(document.uploadDate)}
                       </p>
@@ -1747,50 +1823,66 @@ export const PropertyDetails: React.FC = () => {
               </div>
             )}
 
-            {/* Maintenance Tab */}
-            {activeTab === 'maintenance' && (
-              <div className="space-y-4">
+            {/* Communication Log Tab */}
+            {activeTab === 'communication' && (
+              <div className="space-y-6">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-lg font-semibold text-glass">Maintenance Requests</h3>
-                  <Button className="flex items-center gap-2">
-                    <AlertTriangle size={16} />
-                    New Request
+                  <h3 className="text-lg font-semibold text-glass">Communication Log</h3>
+                  <Button 
+                    onClick={exportToCSV}
+                    className="flex items-center gap-2"
+                    disabled={filteredMessages.length === 0}
+                  >
+                    <Download size={16} />
+                    Export CSV
                   </Button>
                 </div>
 
-                <div className="space-y-3">
-                  {maintenanceRequests.length === 0 ? (
+                {/* Table */}
+                <div className="glass-card rounded-xl overflow-hidden">
+                  {filteredMessages.length === 0 ? (
                     <div className="text-center py-8 text-glass-muted">
-                      <p>No maintenance requests found</p>
+                      <p>No communication messages found</p>
                     </div>
                   ) : (
-                    maintenanceRequests.map((request) => (
-                      <div key={request.id} className="glass rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                              request.status === 'completed' ? 'bg-green-100 text-green-700' :
-                              request.status === 'in_progress' ? 'bg-orange-100 text-orange-600' :
-                              'bg-red-100 text-red-600'
-                            }`}>
-                              <AlertTriangle size={16} />
-                            </div>
-                            <div>
-                              <p className="font-medium text-glass">{request.title || 'Maintenance Request'}</p>
-                              <p className="text-sm text-glass-muted">{formatDateDDMMYYYY(request.created_at)}</p>
-                            </div>
-                          </div>
-                          
-                          <div className="text-right">
-                            <p className="text-sm text-glass capitalize">{request.status}</p>
-                            <p className="text-xs text-glass-muted">Priority: {request.priority || 'Medium'}</p>
-                          </div>
-                        </div>
-                        {request.description && (
-                          <p className="text-sm text-glass-muted mt-2">{request.description}</p>
-                        )}
-                      </div>
-                    ))
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-glass-input">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-glass-muted uppercase tracking-wider w-32">
+                              Date
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-glass-muted uppercase tracking-wider w-48">
+                              Subject
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-glass-muted uppercase tracking-wider">
+                              Body
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-glass-border">
+                          {filteredMessages.map((message, index) => (
+                            <tr key={index} className="hover:bg-glass-input/50">
+                              <td className="px-4 py-3 text-sm text-glass whitespace-nowrap">
+                                {formatDateDDMMYYYY(message.sent_at)}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-glass">
+                                <div className="max-w-xs truncate" title={message.Subject || 'No Subject'}>
+                                  {message.Subject || 'No Subject'}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-glass-muted">
+                                <div className="max-w-2xl">
+                                  <div className="line-clamp-3" title={htmlToText(message.message_body)}>
+                                    {htmlToText(message.message_body)}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               </div>
@@ -2558,7 +2650,7 @@ export const PropertyDetails: React.FC = () => {
           onClose={handleCloseMessageModal}
           propertyId={currentProperty.id}
           propertyName={currentProperty.name}
-          tenantId={leaseId}
+          tenantId={rawPropertyData?.leases?.[0]?.tenant_id}
           tenantName={currentProperty.tenant}
           tenantEmail={currentProperty.tenantEmail}
         />

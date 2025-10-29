@@ -1,8 +1,9 @@
 import React from 'react'
-import { Building2, User, LogIn, LogOut } from 'lucide-react'
+import { User, LogIn, LogOut } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
+import { Logo } from './Logo'
 
 interface HeaderProps {
   className?: string
@@ -26,7 +27,7 @@ export function Header({ className }: HeaderProps) {
         {/* Company Logo and Name */}
         <Link to="/" className="flex items-center gap-3 relative">
           <div className="p-2 rounded-full bg-gradient-to-br from-[#053725] to-[#053725]/80 shadow-[0_4px_20px_rgba(5,55,37,0.3)] neumorphic">
-            <Building2 size={24} className="text-[#F9F7E7]" strokeWidth={2} />
+            <Logo size="md" className="text-[#F9F7E7]" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-[#053725] tracking-tight">PropertyPro</h1>

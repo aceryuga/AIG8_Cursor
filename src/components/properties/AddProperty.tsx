@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
   ArrowRight, 
-  Building2, 
   LogOut, 
   HelpCircle, 
   User, 
@@ -22,6 +21,7 @@ import {
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
 import { NotificationBell } from '../ui/NotificationBell';
+import { Logo } from '../ui/Logo';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { getCurrentUTC } from '../../utils/timezoneUtils';
@@ -575,7 +575,7 @@ export const AddProperty: React.FC = () => {
             <div className="flex items-center gap-8">
               <Link to="/dashboard" className="flex items-center gap-3">
                 <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                  <Building2 className="w-5 h-5 text-green-800" />
+                  <Logo size="sm" className="text-green-800" />
                 </div>
                 <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
               </Link>
@@ -611,9 +611,6 @@ export const AddProperty: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="p-2">
-                    <User size={16} />
-                  </Button>
                   <Button variant="ghost" size="sm" className="p-2">
                     <HelpCircle size={16} />
                   </Button>
@@ -987,7 +984,7 @@ export const AddProperty: React.FC = () => {
                   <div className="border-t border-white border-opacity-20 pt-2 mt-2">
                     <div className="flex justify-between font-medium">
                       <span className="text-glass">Total Monthly Collection:</span>
-                      <span className="text-glass">₹{(form.rent + form.maintenanceCharges).toLocaleString()}</span>
+                      <span className="text-glass">₹{(Number(form.rent) + Number(form.maintenanceCharges)).toLocaleString()}</span>
                     </div>
                   </div>
                 </div>

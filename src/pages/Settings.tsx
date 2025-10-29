@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
-  Building2, 
+   
   LogOut, 
   Bell, 
   HelpCircle, 
@@ -26,6 +26,7 @@ import {
 import { Button } from '../components/webapp-ui/Button';
 import { Input } from '../components/webapp-ui/Input';
 import { PasswordStrength } from '../components/webapp-ui/PasswordStrength';
+import { Logo } from '../components/ui/Logo';
 import { useAuth } from '../hooks/useAuth';
 // import { formatDateDDMMYYYY } from '../utils/timezoneUtils';
 import { validateEmail, validatePhone, validatePassword } from '../utils/validation';
@@ -275,7 +276,7 @@ export const SettingsPage: React.FC = () => {
             <div className="flex items-center gap-8">
               <Link to="/dashboard" className="flex items-center gap-3">
                 <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                  <Building2 className="w-5 h-5 text-green-800" />
+                  <Logo size="sm" className="text-green-800" />
                 </div>
                 <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
               </Link>
@@ -318,9 +319,6 @@ export const SettingsPage: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="p-2">
-                    <User size={16} />
-                  </Button>
                   <Button variant="ghost" size="sm" className="p-2">
                     <HelpCircle size={16} />
                   </Button>
@@ -424,7 +422,7 @@ export const SettingsPage: React.FC = () => {
                       value={profileForm.propertyCount}
                       onChange={handleProfileChange('propertyCount')}
                       error={errors.propertyCount}
-                      icon={<Building2 size={18} />}
+                      icon={<Logo size="sm" className="text-green-800" />}
                       placeholder="5"
                       numericType="integer"
                       min={0}

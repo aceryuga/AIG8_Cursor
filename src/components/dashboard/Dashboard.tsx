@@ -6,12 +6,11 @@ import { getRecentActivityTime } from '../../utils/timezoneUtils';
 import { calculateLeaseStatus, getLeaseStatusColor, getLeaseStatusIcon } from '../../utils/leaseStatus';
 import { ImageWithFallback } from '../ui/ImageWithFallback';
 import { NotificationBell } from '../ui/NotificationBell';
+import { Logo } from '../ui/Logo';
 import { Link } from 'react-router-dom';
 import { PaymentService } from '../../services/paymentService';
-import { 
-  Building2, 
+import {
   LogOut, 
-  User, 
   HelpCircle, 
   Plus, 
   IndianRupee, 
@@ -34,8 +33,11 @@ import {
   Wrench,
   MessageSquare,
   DollarSign,
+  Folder,
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
+import { formatFileSize } from '../../utils/propertyImages';
+import { getUserSubscription, getUserProfile, type UserSubscription } from '../../utils/settingsUtils';
 
 // Property interface removed as it's not used in this component
 
@@ -45,13 +47,22 @@ interface SupabaseProperty {
   address: string;
   status: string;
   images: string;
+  created_at?: string;
+  property_images?: {
+    id: string;
+    image_url: string;
+    is_primary: boolean;
+  }[];
   leases?: {
+    id: string;
     monthly_rent: number;
     security_deposit: number;
     maintenance_charges: number;
     start_date: string;
     end_date: string;
     is_active: boolean;
+    created_at?: string;
+    updated_at?: string;
     tenants?: {
       name: string;
       phone: string;
@@ -62,7 +73,7 @@ interface SupabaseProperty {
 
 interface Activity {
   id: string;
-  type: 'payment' | 'lease' | 'maintenance' | 'document';
+  type: 'payment' | 'lease' | 'maintenance' | 'document' | 'gallery' | 'communication' | 'rental';
   message: string;
   time: string;
   timestamp: number; // Add timestamp for proper sorting
@@ -87,6 +98,13 @@ export const Dashboard: React.FC = () => {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
+  
+  // Storage calculation states
+  const [totalStorageBytes, setTotalStorageBytes] = useState(0);
+  const [userSubscription, setUserSubscription] = useState<UserSubscription | null>(null);
+  
+  // User profile state
+  const [userProfile, setUserProfile] = useState<any>(null);
 
   // Close dropdowns when clicking outside
   React.useEffect(() => {
@@ -105,7 +123,7 @@ export const Dashboard: React.FC = () => {
     };
   }, [showHelp]);
 
-  // Fetch data from Supabase
+  // Fetch data from Supabase - OPTIMIZED for performance
   useEffect(() => {
     if (!user?.id) {
       setDataLoading(false);
@@ -117,193 +135,175 @@ export const Dashboard: React.FC = () => {
         setDataLoading(true);
         setDataError(null);
 
-        // Fetch properties with their leases and tenants (only active properties)
-        const { data: properties, error: propError } = await supabase
-          .from('properties')
-          .select(`
-            *,
-            leases(
-              id,
-              monthly_rent,
-              security_deposit,
-              maintenance_charges,
-              start_date,
-              end_date,
-              is_active,
-              created_at,
-              updated_at,
-              tenants(
-                name,
-                phone,
-                email
+        // ⚡ OPTIMIZATION: Fetch all data in parallel instead of sequentially
+        const [
+          propertiesResult,
+          deletedPropertiesResult,
+          documentsResult,
+          propertyImagesResult,
+          maintenanceResult,
+          communicationResult,
+          rentalIncreasesResult
+        ] = await Promise.allSettled([
+          // Fetch properties with their leases and tenants (only active properties)
+          supabase
+            .from('properties')
+            .select(`
+              *,
+              leases(
+                id,
+                monthly_rent,
+                security_deposit,
+                maintenance_charges,
+                start_date,
+                end_date,
+                is_active,
+                created_at,
+                updated_at,
+                tenants(
+                  name,
+                  phone,
+                  email
+                )
+              ),
+              property_images!left(
+                id,
+                image_url,
+                is_primary
               )
-            ),
-            property_images!left(
-              id,
-              image_url,
-              is_primary
-            )
-          `)
-          .eq('owner_id', user.id)
-          .eq('active', 'Y');
+            `)
+            .eq('owner_id', user.id)
+            .eq('active', 'Y'),
 
-        if (propError) {
-          throw propError;
-        }
+          // Fetch recently deleted properties for audit trail
+          supabase
+            .from('properties')
+            .select(`id, name, updated_at`)
+            .eq('owner_id', user.id)
+            .eq('active', 'N')
+            .order('updated_at', { ascending: false })
+            .limit(5),
 
-        setSupabaseProperties(properties || []);
-
-        // Fetch recent payments for payment status calculation using centralized service
-        const paymentsData = await PaymentService.getPaymentsForProperties(properties?.map(p => p.id) || []);
-
-        // Fetch recently deleted properties for audit trail
-        const { data: deletedProperties, error: deletedError } = await supabase
-          .from('properties')
-          .select(`
-            id,
-            name,
-            updated_at
-          `)
-          .eq('owner_id', user.id)
-          .eq('active', 'N')
-          .order('updated_at', { ascending: false })
-          .limit(5);
-
-        if (deletedError) {
-          console.warn('Error fetching deleted properties:', deletedError);
-        }
-
-        setPayments(paymentsData);
-
-        // Fetch recent documents for document upload activities
-        const { data: documentsData, error: documentsError } = await supabase
-          .from('documents')
-          .select(`
-            id,
-            name,
-            doc_type,
-            uploaded_at,
-            property_id,
-            properties!inner(
+          // Fetch recent documents for document upload activities
+          supabase
+            .from('documents')
+            .select(`
               id,
               name,
-              owner_id
-            )
-          `)
-          .eq('properties.owner_id', user.id)
-          .order('uploaded_at', { ascending: false })
-          .limit(10);
+              doc_type,
+              uploaded_at,
+              property_id,
+              properties!inner(id, name, owner_id)
+            `)
+            .eq('properties.owner_id', user.id)
+            .order('uploaded_at', { ascending: false })
+            .limit(10),
 
-        if (documentsError) {
-          console.warn('Error fetching documents:', documentsError);
-        }
-
-        // Fetch recent property images for gallery upload activities
-        const { data: propertyImagesData, error: propertyImagesError } = await supabase
-          .from('property_images')
-          .select(`
-            id,
-            image_name,
-            created_at,
-            properties!inner(
+          // Fetch recent property images for gallery upload activities
+          supabase
+            .from('property_images')
+            .select(`
               id,
-              name,
-              owner_id
-            )
-          `)
-          .eq('properties.owner_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(10);
+              image_name,
+              created_at,
+              properties!inner(id, name, owner_id)
+            `)
+            .eq('properties.owner_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(10),
 
-        if (propertyImagesError) {
-          console.warn('Error fetching property images:', propertyImagesError);
-        }
-
-        // Fetch recent maintenance requests
-        const { data: maintenanceData, error: maintenanceError } = await supabase
-          .from('maintenance_requests')
-          .select(`
-            id,
-            description,
-            status,
-            created_at,
-            properties!inner(
+          // Fetch recent maintenance requests
+          supabase
+            .from('maintenance_requests')
+            .select(`
               id,
-              name,
-              owner_id
-            ),
-            tenants(
-              name
-            )
-          `)
-          .eq('properties.owner_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(10);
+              description,
+              status,
+              created_at,
+              properties!inner(id, name, owner_id),
+              tenants(name)
+            `)
+            .eq('properties.owner_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(10),
 
-        if (maintenanceError) {
-          console.warn('Error fetching maintenance requests:', maintenanceError);
-        }
-
-        // Fetch recent communication logs
-        let communicationData = null;
-        try {
-          const { data, error: communicationError } = await supabase
+          // Fetch recent communication logs (optional - may not exist)
+          supabase
             .from('communication_log')
             .select(`
               id,
               mode,
               message,
               sent_at,
-              properties!inner(
-                id,
-                name,
-                owner_id
-              ),
-              tenants(
-                name
-              )
+              properties!inner(id, name, owner_id),
+              tenants(name)
             `)
             .eq('properties.owner_id', user.id)
             .order('sent_at', { ascending: false })
-            .limit(10);
+            .limit(10),
 
-          if (communicationError) {
-            console.warn('Error fetching communication logs:', communicationError);
-          } else {
-            communicationData = data;
-          }
-        } catch (error) {
-          console.warn('Communication logs table may not exist or have permission issues:', error);
-        }
-
-        // Fetch recent rental increases
-        const { data: rentalIncreasesData, error: rentalIncreasesError } = await supabase
-          .from('rental_increases')
-          .select(`
-            id,
-            old_rent,
-            new_rent,
-            effective_date,
-            created_at,
-            leases!inner(
+          // Fetch recent rental increases
+          supabase
+            .from('rental_increases')
+            .select(`
               id,
-              properties!inner(
+              old_rent,
+              new_rent,
+              effective_date,
+              created_at,
+              leases!inner(
                 id,
-                name,
-                owner_id
-              ),
-              tenants(
-                name
+                properties!inner(id, name, owner_id),
+                tenants(name)
               )
-            )
-          `)
-          .eq('leases.properties.owner_id', user.id)
-          .order('created_at', { ascending: false })
-          .limit(10);
+            `)
+            .eq('leases.properties.owner_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(10)
+        ]);
 
-        if (rentalIncreasesError) {
-          console.warn('Error fetching rental increases:', rentalIncreasesError);
+        // Extract data from results
+        const properties = propertiesResult.status === 'fulfilled' && !propertiesResult.value.error
+          ? propertiesResult.value.data || []
+          : [];
+        
+        const deletedProperties = deletedPropertiesResult.status === 'fulfilled' && !deletedPropertiesResult.value.error
+          ? deletedPropertiesResult.value.data || []
+          : [];
+        
+        const documentsData = documentsResult.status === 'fulfilled' && !documentsResult.value.error
+          ? documentsResult.value.data || []
+          : [];
+        
+        const propertyImagesData = propertyImagesResult.status === 'fulfilled' && !propertyImagesResult.value.error
+          ? propertyImagesResult.value.data || []
+          : [];
+        
+        const maintenanceData = maintenanceResult.status === 'fulfilled' && !maintenanceResult.value.error
+          ? maintenanceResult.value.data || []
+          : [];
+        
+        const communicationData = communicationResult.status === 'fulfilled' && !communicationResult.value.error
+          ? communicationResult.value.data || []
+          : [];
+        
+        const rentalIncreasesData = rentalIncreasesResult.status === 'fulfilled' && !rentalIncreasesResult.value.error
+          ? rentalIncreasesResult.value.data || []
+          : [];
+
+        // Check for critical errors
+        if (propertiesResult.status === 'rejected' || (propertiesResult.status === 'fulfilled' && propertiesResult.value.error)) {
+          throw propertiesResult.status === 'rejected' ? propertiesResult.reason : propertiesResult.value.error;
         }
+
+        setSupabaseProperties(properties);
+
+        // Fetch payments for properties (only after we have property IDs)
+        const paymentsData = properties.length > 0 
+          ? await PaymentService.getPaymentsForProperties(properties.map(p => p.id))
+          : [];
+
+        setPayments(paymentsData);
 
         // Generate activities from recent payments and properties
         const recentActivities: Activity[] = [];
@@ -437,12 +437,13 @@ export const Dashboard: React.FC = () => {
 
         // Add document upload activities
         if (documentsData && documentsData.length > 0) {
-          documentsData.forEach((document) => {
-            if (document.uploaded_at) {
+          documentsData.forEach((document: any) => {
+            if (document.uploaded_at && document.properties) {
+              const propData = Array.isArray(document.properties) ? document.properties[0] : document.properties;
               recentActivities.push({
                 id: `document-${document.id}`,
                 type: 'document',
-                message: `Document "${document.name}" uploaded to "${document.properties.name}"`,
+                message: `Document "${document.name}" uploaded to "${propData?.name || 'Unknown Property'}"`,
                 time: getRecentActivityTime(document.uploaded_at),
                 timestamp: new Date(document.uploaded_at).getTime(),
                 status: 'info'
@@ -453,12 +454,13 @@ export const Dashboard: React.FC = () => {
 
         // Add gallery upload activities
         if (propertyImagesData && propertyImagesData.length > 0) {
-          propertyImagesData.forEach((image) => {
-            if (image.created_at) {
+          propertyImagesData.forEach((image: any) => {
+            if (image.created_at && image.properties) {
+              const propData = Array.isArray(image.properties) ? image.properties[0] : image.properties;
               recentActivities.push({
                 id: `gallery-${image.id}`,
                 type: 'gallery',
-                message: `Image "${image.image_name}" uploaded to "${image.properties.name}"`,
+                message: `Image "${image.image_name}" uploaded to "${propData?.name || 'Unknown Property'}"`,
                 time: getRecentActivityTime(image.created_at),
                 timestamp: new Date(image.created_at).getTime(),
                 status: 'info'
@@ -469,13 +471,15 @@ export const Dashboard: React.FC = () => {
 
         // Add maintenance request activities
         if (maintenanceData && maintenanceData.length > 0) {
-          maintenanceData.forEach((request) => {
-            if (request.created_at) {
-              const tenant = request.tenants?.name || 'Unknown Tenant';
+          maintenanceData.forEach((request: any) => {
+            if (request.created_at && request.properties) {
+              const propData = Array.isArray(request.properties) ? request.properties[0] : request.properties;
+              const tenantData = Array.isArray(request.tenants) ? request.tenants[0] : request.tenants;
+              const tenant = tenantData?.name || 'Unknown Tenant';
               recentActivities.push({
                 id: `maintenance-${request.id}`,
                 type: 'maintenance',
-                message: `Maintenance request from ${tenant} at "${request.properties.name}"`,
+                message: `Maintenance request from ${tenant} at "${propData?.name || 'Unknown Property'}"`,
                 time: getRecentActivityTime(request.created_at),
                 timestamp: new Date(request.created_at).getTime(),
                 status: request.status === 'open' ? 'warning' : 'info'
@@ -486,9 +490,11 @@ export const Dashboard: React.FC = () => {
 
         // Add communication log activities
         if (communicationData && communicationData.length > 0) {
-          communicationData.forEach((comm) => {
-            if (comm.sent_at) {
-              const tenant = comm.tenants?.name || 'Unknown Tenant';
+          communicationData.forEach((comm: any) => {
+            if (comm.sent_at && comm.properties) {
+              const propData = Array.isArray(comm.properties) ? comm.properties[0] : comm.properties;
+              const tenantData = Array.isArray(comm.tenants) ? comm.tenants[0] : comm.tenants;
+              const tenant = tenantData?.name || 'Unknown Tenant';
               const modeText = comm.mode === 'call' ? 'call' : 
                               comm.mode === 'sms' ? 'SMS' : 
                               comm.mode === 'email' ? 'email' : 
@@ -496,7 +502,7 @@ export const Dashboard: React.FC = () => {
               recentActivities.push({
                 id: `communication-${comm.id}`,
                 type: 'communication',
-                message: `${modeText.charAt(0).toUpperCase() + modeText.slice(1)} sent to ${tenant} at "${comm.properties.name}"`,
+                message: `${modeText.charAt(0).toUpperCase() + modeText.slice(1)} sent to ${tenant} at "${propData?.name || 'Unknown Property'}"`,
                 time: getRecentActivityTime(comm.sent_at),
                 timestamp: new Date(comm.sent_at).getTime(),
                 status: 'info'
@@ -507,10 +513,13 @@ export const Dashboard: React.FC = () => {
 
         // Add rental increase activities
         if (rentalIncreasesData && rentalIncreasesData.length > 0) {
-          rentalIncreasesData.forEach((increase) => {
-            if (increase.created_at) {
-              const tenant = increase.leases?.tenants?.name || 'Unknown Tenant';
-              const propertyName = increase.leases?.properties?.name || 'Unknown Property';
+          rentalIncreasesData.forEach((increase: any) => {
+            if (increase.created_at && increase.leases) {
+              const leaseData = Array.isArray(increase.leases) ? increase.leases[0] : increase.leases;
+              const propData = Array.isArray(leaseData?.properties) ? leaseData.properties[0] : leaseData?.properties;
+              const tenantData = Array.isArray(leaseData?.tenants) ? leaseData.tenants[0] : leaseData?.tenants;
+              const tenant = tenantData?.name || 'Unknown Tenant';
+              const propertyName = propData?.name || 'Unknown Property';
               recentActivities.push({
                 id: `rental-increase-${increase.id}`,
                 type: 'rental',
@@ -539,6 +548,90 @@ export const Dashboard: React.FC = () => {
 
     fetchData();
   }, [user?.id]);
+
+  // Fetch user profile from custom users table
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      if (!user?.id) {
+        setUserProfile(null);
+        return;
+      }
+
+      try {
+        const profile = await getUserProfile(user.id);
+        setUserProfile(profile);
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+        setUserProfile(null);
+      }
+    };
+
+    fetchUserProfile();
+  }, [user?.id]);
+
+  // ⚡ OPTIMIZED: Storage calculation effect - uses already fetched properties
+  useEffect(() => {
+    const calculateStorage = async () => {
+      if (!user?.id || supabaseProperties.length === 0) {
+        // If no properties loaded yet, wait for main data fetch
+        if (!user?.id) return;
+        // Fallback: fetch minimal data needed
+        if (supabaseProperties.length === 0 && !dataLoading) {
+          setTotalStorageBytes(0);
+          return;
+        }
+        return;
+      }
+      
+      try {
+        // Fetch subscription and storage data in parallel
+        const [subscriptionResult, documentsResult, imagesResult] = await Promise.allSettled([
+          // Fetch user subscription plan for storage limit display
+          getUserSubscription(user.id),
+          
+          // Get documents storage
+          supabase
+            .from('documents')
+            .select('file_size')
+            .eq('uploaded_by', user.id)
+            .not('name', 'like', '[DELETED]%'),
+          
+          // Get property images storage using already fetched property IDs
+          supabase
+            .from('property_images')
+            .select('image_size')
+            .in('property_id', supabaseProperties.map(p => p.id))
+        ]);
+
+        // Extract subscription
+        if (subscriptionResult.status === 'fulfilled') {
+          setUserSubscription(subscriptionResult.value);
+        }
+
+        // Extract documents data
+        const documentsData = documentsResult.status === 'fulfilled' && !documentsResult.value.error
+          ? documentsResult.value.data || []
+          : [];
+
+        // Extract images data
+        const imagesData = imagesResult.status === 'fulfilled' && !imagesResult.value.error
+          ? imagesResult.value.data || []
+          : [];
+        
+        // Calculate total storage from both sources
+        const documentsBytes = documentsData.reduce((sum, doc) => sum + (doc.file_size || 0), 0);
+        const imagesBytes = imagesData.reduce((sum, img) => sum + (img.image_size || 0), 0);
+        const totalBytes = documentsBytes + imagesBytes;
+        
+        setTotalStorageBytes(totalBytes);
+      } catch (error) {
+        console.error('Error calculating storage:', error);
+        setTotalStorageBytes(0);
+      }
+    };
+    
+    calculateStorage();
+  }, [user?.id, supabaseProperties, dataLoading]);
 
   const handleLogout = async () => {
     await logout();
@@ -574,6 +667,16 @@ export const Dashboard: React.FC = () => {
     return rentStatus.status;
   };
 
+  // Convert payments to rent payment format first (needed for calculations below)
+  const rentPayments: RentPayment[] = payments.map(payment => ({
+    id: payment.id,
+    lease_id: (payment.leases as any)?.id || '',
+    payment_date: payment.payment_date,
+    payment_amount: payment.payment_amount,
+    status: payment.status as 'completed' | 'pending' | 'failed',
+    payment_type: payment.payment_type
+  }));
+
   // Use real data from Supabase only (no mock fallback)
   const properties = supabaseProperties.map(prop => {
     const activeLease = prop.leases && prop.leases.length > 0 ?
@@ -584,6 +687,20 @@ export const Dashboard: React.FC = () => {
     const leaseStatus = activeLease?.end_date ? 
       calculateLeaseStatus(activeLease.end_date) : 
       { status: 'active', message: 'No Lease', daysRemaining: 0, priority: 1 };
+
+    // Calculate rent status and amount for due/overdue display
+    let rentAmount = 0;
+    if (activeLease) {
+      const propertyWithLease: PropertyWithLease = {
+        id: prop.id,
+        lease_id: (activeLease as any).id,
+        monthly_rent: activeLease.monthly_rent,
+        start_date: activeLease.start_date,
+        is_active: activeLease.is_active
+      };
+      const rentStatus = calculateRentStatus(propertyWithLease, rentPayments);
+      rentAmount = rentStatus.amount;
+    }
 
     return {
       id: prop.id,
@@ -599,7 +716,8 @@ export const Dashboard: React.FC = () => {
         prop.property_images[0]?.image_url || 
         '/placeholder-property.jpg' : '/placeholder-property.jpg',
       dueDate: activeLease?.end_date || 'No lease',
-      leases: prop.leases // Keep leases data for overdue calculation
+      leases: prop.leases, // Keep leases data for overdue calculation
+      dueAmount: rentAmount // Add the calculated amount
     };
   });
 
@@ -623,15 +741,6 @@ export const Dashboard: React.FC = () => {
       is_active: activeLease.is_active
     };
   }).filter(Boolean) as PropertyWithLease[];
-
-  const rentPayments: RentPayment[] = payments.map(payment => ({
-    id: payment.id,
-    lease_id: (payment.leases as any)?.id || '',
-    payment_date: payment.payment_date,
-    payment_amount: payment.payment_amount,
-    status: payment.status as 'completed' | 'pending' | 'failed',
-    payment_type: payment.payment_type
-  }));
 
 
   // Calculate amounts for overdue and pending properties
@@ -698,14 +807,13 @@ export const Dashboard: React.FC = () => {
             <div className="flex items-center gap-8">
               <Link to="/dashboard" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
                 <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                  <Building2 className="w-5 h-5 text-green-800" />
+                  <Logo size="sm" className="text-green-800" />
                 </div>
                 <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
               </Link>
               
               <nav className="hidden md:flex items-center gap-6">
                 {[
-                  { name: 'Home', path: '/' },
                   { name: 'Dashboard', path: '/dashboard' },
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
@@ -735,11 +843,8 @@ export const Dashboard: React.FC = () => {
 
               {/* User Menu */}
               <div className="flex items-center gap-2">
-                <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
+                <span className="text-glass hidden sm:block whitespace-nowrap">{userProfile?.name || user?.name}</span>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="p-2">
-                    <User size={16} />
-                  </Button>
                   <div className="relative help-dropdown">
                     <Button 
                       variant="ghost" 
@@ -833,7 +938,7 @@ export const Dashboard: React.FC = () => {
         {/* Welcome Section */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-glass mb-2">
-            Welcome back, {user?.name?.split(' ')[0] || 'User'}!
+            Welcome back, {userProfile?.name?.split(' ')[0] || user?.name?.split(' ')[0] || 'User'}!
           </h1>
           <p className="text-xl text-glass-muted">
             Here's what's happening with your property portfolio today.
@@ -841,7 +946,7 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Portfolio Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6 mb-8">
           <div className="glass-card rounded-xl p-6 glow">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
@@ -897,6 +1002,23 @@ export const Dashboard: React.FC = () => {
             <p className="text-2xl font-bold text-red-600">₹{overdueAmount.toLocaleString()}</p>
             <p className="text-sm text-red-600 mt-2">Past Due</p>
           </div>
+
+          <div className="glass-card rounded-xl p-6 glow">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 glass rounded-lg flex items-center justify-center">
+                <Folder className="w-6 h-6 text-green-800" />
+              </div>
+            </div>
+            <h3 className="text-sm font-medium text-glass-muted mb-1">Total Storage Used</h3>
+            <p className="text-2xl font-bold text-glass">{formatFileSize(totalStorageBytes)}</p>
+            <p className="text-sm text-green-700 mt-2">
+              of {userSubscription?.plan?.storage_limit_mb === -1 
+                ? 'Unlimited' 
+                : userSubscription?.plan?.storage_limit_mb != null 
+                  ? formatFileSize(userSubscription.plan.storage_limit_mb * 1024 * 1024)
+                  : '—'}
+            </p>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -950,6 +1072,11 @@ export const Dashboard: React.FC = () => {
                             {property.paymentStatus}
                           </span>
                         </div>
+                        {(property.paymentStatus === 'pending' || property.paymentStatus === 'overdue') && property.dueAmount > 0 && (
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                            ₹{property.dueAmount.toLocaleString()}
+                          </span>
+                        )}
                         {property.leaseStatus && property.leaseStatus.status !== 'active' && (
                           <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
                             {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}

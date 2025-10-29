@@ -2,10 +2,10 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
-import { initializeErrorHandlers } from './utils/errorHandler';
+// import { initializeErrorHandlers } from './utils/errorHandler';
 
 // Initialize global error handlers
-initializeErrorHandlers();
+// initializeErrorHandlers(); // Commented out to prevent Supabase interference
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

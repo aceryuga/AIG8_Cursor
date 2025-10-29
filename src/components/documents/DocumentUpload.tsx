@@ -2,9 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   ArrowLeft, 
-  Building2, 
+   
   LogOut, 
-  Bell, 
   HelpCircle, 
   User, 
   Upload, 
@@ -16,18 +15,15 @@ import {
   CheckCircle, 
   AlertTriangle, 
   Calendar, 
-  Tag, 
-  Home, 
-  Eye, 
-  Trash2,
+  Eye,
   Plus,
   Zap
 } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
-import { Input } from '../webapp-ui/Input';
 import { NotificationBell } from '../ui/NotificationBell';
+import { Logo } from '../ui/Logo';
 import { useAuth } from '../../hooks/useAuth';
-import { uploadDocument, fetchUserDocuments, DocumentMetadata } from '../../utils/documentUpload';
+import { uploadDocument } from '../../utils/documentUpload';
 import { supabase } from '../../lib/supabase';
 
 interface UploadFile {
@@ -43,6 +39,8 @@ interface UploadFile {
   leaseId: string;
   tenantId: string;
   ocrText?: string;
+  expiryDate?: string;
+  description?: string;
 }
 
 interface Property {
@@ -67,7 +65,6 @@ export const DocumentUpload: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadComplete, setUploadComplete] = useState(false);
   const [properties, setProperties] = useState<Property[]>([]);
-  const [loading, setLoading] = useState(true);
   
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -81,7 +78,6 @@ export const DocumentUpload: React.FC = () => {
   useEffect(() => {
     const fetchProperties = async () => {
       if (!user?.id) {
-        setLoading(false);
         return;
       }
 
@@ -100,8 +96,6 @@ export const DocumentUpload: React.FC = () => {
         }
       } catch (err) {
         console.error('Error fetching properties:', err);
-      } finally {
-        setLoading(false);
       }
     };
 
@@ -276,7 +270,7 @@ export const DocumentUpload: React.FC = () => {
             <div className="flex items-center gap-8">
               <Link to="/dashboard" className="flex items-center gap-3">
                 <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                  <Building2 className="w-5 h-5 text-green-800" />
+                  <Logo size="sm" className="text-green-800" />
                 </div>
                 <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
               </Link>
@@ -312,9 +306,6 @@ export const DocumentUpload: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="p-2">
-                    <User size={16} />
-                  </Button>
                   <Button variant="ghost" size="sm" className="p-2">
                     <HelpCircle size={16} />
                   </Button>

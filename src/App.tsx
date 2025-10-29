@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Header } from './components/ui/header';
 import { NavBar } from './components/ui/tubelight-navbar';
@@ -15,6 +15,9 @@ import { Home, Zap, DollarSign, MessageCircle, Building, Users, Star, Clock, Tre
 import { useAuth } from './hooks/useAuth';
 import { useNavigate } from 'react-router-dom';
 
+// Import notification test utility (available in console)
+// import './utils/testNotificationGeneration'; // Commented out to prevent interference with auth
+
 // Import Real Auth Pages
 import { LoginPage } from './components/auth/LoginPage';
 import { SignupPage } from './components/auth/SignupPage';
@@ -29,6 +32,7 @@ import { AddProperty } from './components/properties/AddProperty';
 import { PaymentHistory } from './components/payments/PaymentHistory';
 import { RecordPayment } from './components/payments/RecordPayment'; 
 import { AIReconciliation } from './components/payments/AIReconciliation';
+import { ReconciliationHistory } from './components/payments/ReconciliationHistory';
 import { DocumentVault } from './components/documents/DocumentVault';
 import { DocumentUpload } from './components/documents/DocumentUpload';
 import { DocumentViewer } from './components/documents/DocumentViewer';
@@ -42,6 +46,13 @@ import AIChatbot from './components/ui/AIChatbot';
 const LandingPage = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  
+  // Redirect authenticated users to Dashboard
+  React.useEffect(() => {
+    if (user) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [user, navigate]);
   const scrollToSection = (sectionId: string) => {
     const element = document.getElementById(sectionId);
     if (element) {
@@ -293,6 +304,7 @@ function App() {
   // Chatbot position state - can be changed dynamically
   const [chatbotPosition, setChatbotPosition] = useState<'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'>('bottom-right');
   
+  
   return (
     <ErrorBoundary>
       <Router>
@@ -358,6 +370,13 @@ function App() {
             <ProtectedRoute>
               <GlobalLayout>
                 <AIReconciliation />
+              </GlobalLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/payments/reconciliation/history" element={
+            <ProtectedRoute>
+              <GlobalLayout>
+                <ReconciliationHistory />
               </GlobalLayout>
             </ProtectedRoute>
           } />

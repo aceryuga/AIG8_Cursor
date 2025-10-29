@@ -12,13 +12,14 @@ export const WEBHOOKS = {
    * 
    * To update: Change the URL below and redeploy the application
    */
-  MESSAGING_WEBHOOK: 'https://n8n.usatinc.com/webhook-test/887b233d-6cd6-40a2-af7e-2d9edd58d570',
+  MESSAGING_WEBHOOK: 'https://primary-production-e3df.up.railway.app/webhook/887b233d-6cd6-40a2-af7e-2d9edd58d570',
     
   /**
    * N8N Webhook for sending messages (Compose Message modal)
    * Triggered when landlord sends a message via the Compose Message button
    */
   MESSAGE_SEND_WEBHOOK: 'https://primary-production-e3df.up.railway.app/webhook/sendmessage',
+  
   // Add more webhooks here as needed
   // PAYMENT_WEBHOOK: 'https://...',
   // NOTIFICATION_WEBHOOK: 'https://...',

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Phone, Mail, Building2, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2, AlertCircle, X } from 'lucide-react';
+import { Search, Grid3x3 as Grid3X3, List, Plus, MapPin, User, Mail, LogOut, HelpCircle, SlidersHorizontal, ArrowUpDown, Trash2, AlertCircle, X } from 'lucide-react';
 import { Button } from '../webapp-ui/Button';
 import { Input } from '../webapp-ui/Input';
+import { Logo } from '../ui/Logo';
 import { useAuth } from '../../hooks/useAuth';
 import { supabase } from '../../lib/supabase';
 import { calculateRentStatus, PropertyWithLease, Payment as RentPayment } from '../../utils/rentCalculations';
@@ -30,6 +31,7 @@ interface Property {
   propertyType: 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa';
   bedrooms?: number;
   area: number;
+  dueAmount?: number;
 }
 
 interface SupabaseProperty {
@@ -43,7 +45,14 @@ interface SupabaseProperty {
   images: string;
   description: string;
   amenities: string;
+  property_images?: {
+    id: string;
+    image_url: string;
+    is_primary: boolean;
+  }[];
   leases?: {
+    id: string;
+    tenant_id: string;
     monthly_rent: number;
     security_deposit: number;
     maintenance_charges: number;
@@ -67,8 +76,8 @@ export const PropertiesList: React.FC = () => {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState<string>('all');
   const [sortBy, setSortBy] = useState<string>('name');
-  const [showFilters, setShowFilters] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [messageModalOpen, setMessageModalOpen] = useState(false);
@@ -97,6 +106,7 @@ export const PropertiesList: React.FC = () => {
             *,
             leases(
               id,
+              tenant_id,
               monthly_rent,
               security_deposit,
               maintenance_charges,
@@ -132,7 +142,8 @@ export const PropertiesList: React.FC = () => {
           lease_id: (payment.leases as any)?.id || '',
           payment_date: payment.payment_date,
           payment_amount: payment.payment_amount,
-          status: payment.status as 'completed' | 'pending' | 'failed'
+          status: payment.status as 'completed' | 'pending' | 'failed',
+          payment_type: payment.payment_type
         }));
         setPayments(rentPayments);
       } catch (err: any) {
@@ -158,6 +169,7 @@ export const PropertiesList: React.FC = () => {
         
         // Calculate rent status using new system - only for occupied properties
         let paymentStatus: 'paid' | 'pending' | 'overdue' | null = null;
+        let dueAmount = 0;
         if (activeLease && prop.status === 'occupied') {
           const propertyWithLease: PropertyWithLease = {
             id: prop.id,
@@ -169,6 +181,7 @@ export const PropertiesList: React.FC = () => {
           
           const rentStatus = calculateRentStatus(propertyWithLease, payments);
           paymentStatus = rentStatus.status;
+          dueAmount = rentStatus.amount;
           
         }
         
@@ -195,7 +208,8 @@ export const PropertiesList: React.FC = () => {
           dueDate: activeLease?.end_date || 'No lease',
           propertyType: (prop.property_type as 'apartment' | 'co-working-space' | 'duplex' | 'independent-house' | 'office' | 'penthouse' | 'retail-space' | 'serviced-apartment' | 'shop' | 'studio-apartment' | 'villa') || 'apartment',
           bedrooms: prop.bedrooms || 1,
-          area: prop.area || 0
+          area: prop.area || 0,
+          dueAmount
         };
       });
       setProperties(convertedProperties);
@@ -209,27 +223,22 @@ export const PropertiesList: React.FC = () => {
       const property = supabaseProperties.find(p => p.id === id);
       const propertyName = property?.name || 'Unknown Property';
       
-      // Store timestamp in local timezone format to match existing data
+      // Store timestamp in UTC format (timestamptz) for consistent timezone handling
       const now = new Date();
-      // Create timestamp in the same format as existing data (local timezone without Z)
+      const currentTime = now.toISOString(); // UTC timestamp with timezone
+      
+      // Extract date in YYYY-MM-DD format for end_date
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const seconds = String(now.getSeconds()).padStart(2, '0');
-      const milliseconds = String(now.getMilliseconds()).padStart(3, '0');
-      
-      const currentTime = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}`;
       const currentDate = `${year}-${month}-${day}`;
       
       // Debug logging
       console.log('Property deletion debug - storing:', {
         propertyName,
-        currentTime,
+        currentTime, // Now using UTC timestamp
         currentDate,
-        now: now.toISOString(),
-        nowLocal: now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+        timestamp: now.toISOString()
       });
       
       // 1) End-date active leases for this property with updated_at timestamp
@@ -244,7 +253,7 @@ export const PropertiesList: React.FC = () => {
         .update({ 
           is_active: false, 
           end_date: currentDate,
-          updated_at: currentTime  // Local timezone timestamp
+          updated_at: currentTime  // UTC timestamp with timezone
         })
         .eq('property_id', id)
         .eq('is_active', true);
@@ -273,7 +282,7 @@ export const PropertiesList: React.FC = () => {
         .update({ 
           active: 'N', 
           status: 'vacant',
-          updated_at: currentTime  // Local timezone timestamp
+          updated_at: currentTime  // UTC timestamp with timezone
         })
         .eq('id', id);
 
@@ -344,8 +353,9 @@ export const PropertiesList: React.FC = () => {
     
     const matchesStatus = filterStatus === 'all' || property.status === filterStatus;
     const matchesType = filterType === 'all' || property.propertyType === filterType;
+    const matchesPaymentStatus = filterPaymentStatus === 'all' || property.paymentStatus === filterPaymentStatus;
     
-    return matchesSearch && matchesStatus && matchesType;
+    return matchesSearch && matchesStatus && matchesType && matchesPaymentStatus;
   });
 
   const sortedProperties = [...filteredProperties].sort((a, b) => {
@@ -398,6 +408,11 @@ export const PropertiesList: React.FC = () => {
               </span>
             )}
           </div>
+          {property.paymentStatus && (property.paymentStatus === 'pending' || property.paymentStatus === 'overdue') && property.dueAmount && property.dueAmount > 0 && (
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+              ₹{property.dueAmount.toLocaleString()}
+            </span>
+          )}
           {property.leaseStatus && property.leaseStatus.status !== 'active' && (
             <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
               {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}
@@ -502,6 +517,11 @@ export const PropertiesList: React.FC = () => {
                   </span>
                 )}
               </div>
+              {property.paymentStatus && (property.paymentStatus === 'pending' || property.paymentStatus === 'overdue') && property.dueAmount && property.dueAmount > 0 && (
+                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPaymentStatusColor(property.paymentStatus)}`}>
+                  ₹{property.dueAmount.toLocaleString()}
+                </span>
+              )}
               {property.leaseStatus && property.leaseStatus.status !== 'active' && (
                 <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getLeaseStatusColor(property.leaseStatus.status)}`}>
                   {getLeaseStatusIcon(property.leaseStatus.status)} {property.leaseStatus.message}
@@ -569,14 +589,13 @@ export const PropertiesList: React.FC = () => {
             <div className="flex items-center gap-8">
               <Link to="/dashboard" className="flex items-center gap-3">
                 <div className="w-8 h-8 glass rounded-lg flex items-center justify-center glow">
-                  <Building2 className="w-5 h-5 text-green-800" />
+                  <Logo size="sm" className="text-green-800" />
                 </div>
                 <h1 className="text-xl font-bold text-glass">PropertyPro</h1>
               </Link>
               
               <nav className="hidden md:flex items-center gap-6">
                 {[
-                  { name: 'Home', path: '/' },
                   { name: 'Dashboard', path: '/dashboard' },
                   { name: 'Properties', path: '/properties' },
                   { name: 'Payments', path: '/payments' },
@@ -606,9 +625,6 @@ export const PropertiesList: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="text-glass hidden sm:block whitespace-nowrap">{user?.name}</span>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="sm" className="p-2">
-                    <User size={16} />
-                  </Button>
                   <Button variant="ghost" size="sm" className="p-2">
                     <HelpCircle size={16} />
                   </Button>
@@ -678,15 +694,6 @@ export const PropertiesList: React.FC = () => {
               </Button>
             </div>
 
-            {/* Filters Toggle */}
-            <Button
-              variant="outline"
-              onClick={() => setShowFilters(!showFilters)}
-              className="flex items-center gap-2 h-12"
-            >
-              <SlidersHorizontal size={16} />
-              Filters
-            </Button>
 
             {/* Sort */}
             <div className="flex items-center gap-2 h-12">
@@ -703,21 +710,19 @@ export const PropertiesList: React.FC = () => {
             </div>
           </div>
 
-          {/* Expanded Filters */}
-          {showFilters && (
-            <div className="mt-6 pt-6 border-t border-white border-opacity-20">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Filters */}
+          <div className="mt-6 pt-6 border-t border-white border-opacity-20">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-glass mb-2">Status</label>
+                  <label className="block text-sm font-medium text-glass mb-2">Occupancy</label>
                   <select
                     value={filterStatus}
                     onChange={(e) => setFilterStatus(e.target.value)}
                     className="w-full glass-input rounded-lg px-3 py-2 text-glass"
                   >
-                    <option value="all">All Status</option>
+                    <option value="all">All</option>
                     <option value="occupied">Occupied</option>
                     <option value="vacant">Vacant</option>
-                    <option value="maintenance">Maintenance</option>
                   </select>
                 </div>
                 
@@ -743,22 +748,37 @@ export const PropertiesList: React.FC = () => {
                   </select>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-glass mb-2">Payment Status</label>
+                  <select
+                    value={filterPaymentStatus}
+                    onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                    className="w-full glass-input rounded-lg px-3 py-2 text-glass"
+                  >
+                    <option value="all">All Payments</option>
+                    <option value="paid">Paid</option>
+                    <option value="pending">Pending</option>
+                    <option value="overdue">Overdue</option>
+                  </select>
+                </div>
+
                 <div className="flex items-end">
-                  <Button
-                    variant="outline"
+                  <button
                     onClick={() => {
                       setFilterStatus('all');
                       setFilterType('all');
+                      setFilterPaymentStatus('all');
                       setSearchTerm('');
                     }}
-                    className="w-full"
+                    className="w-full h-10 glass-input rounded-lg flex items-center justify-center hover:bg-white hover:bg-opacity-10 transition-colors"
+                    title="Clear All Filters"
                   >
-                    Clear Filters
-                  </Button>
+                    <SlidersHorizontal size={16} className="text-glass-muted" />
+                    <X size={12} className="text-glass-muted ml-1" />
+                  </button>
                 </div>
               </div>
             </div>
-          )}
         </div>
 
         {/* Results Summary */}
@@ -804,11 +824,11 @@ export const PropertiesList: React.FC = () => {
         {sortedProperties.length === 0 && (
           <div className="text-center py-12">
             <div className="w-16 h-16 glass rounded-full flex items-center justify-center mx-auto mb-4 glow">
-              <Building2 className="w-8 h-8 text-glass-muted" />
+              <Logo size="lg" className="text-glass-muted" />
             </div>
             <h3 className="text-lg font-semibold text-glass mb-2">No properties found</h3>
             <p className="text-glass-muted mb-4">
-              {searchTerm || filterStatus !== 'all' || filterType !== 'all'
+              {searchTerm || filterStatus !== 'all' || filterType !== 'all' || filterPaymentStatus !== 'all'
                 ? 'Try adjusting your search or filters'
                 : 'Get started by adding your first property'
               }
@@ -827,10 +847,7 @@ export const PropertiesList: React.FC = () => {
           onClose={handleCloseMessageModal}
           propertyId={selectedProperty.id}
           propertyName={selectedProperty.name}
-          tenantId={supabaseProperties.find(p => p.id === selectedProperty.id)?.leases?.[0]?.tenants ? 
-            (supabaseProperties.find(p => p.id === selectedProperty.id)?.leases?.[0] as any)?.tenant_id : 
-            undefined
-          }
+          tenantId={supabaseProperties.find(p => p.id === selectedProperty.id)?.leases?.[0]?.tenant_id}
           tenantName={selectedProperty.tenant}
           tenantEmail={selectedProperty.tenantEmail}
         />
