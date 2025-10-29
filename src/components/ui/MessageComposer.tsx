@@ -135,6 +135,35 @@ export const MessageComposer: React.FC<MessageComposerProps> = ({
         // Continue anyway - message was saved to database
       }
 
+      // POST to n8n webhook for message sending (separate workflow)
+      try {
+        const webhookPayload = {
+          tenant_id: tenantId || '',
+          tenant_email: tenantEmail || '',
+          property_id: propertyId,
+          property_name: propertyName,
+          message: htmlContent,
+        };
+
+        const webhookResponse = await fetch(WEBHOOKS.MESSAGE_SEND_WEBHOOK, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(webhookPayload),
+        });
+
+        if (!webhookResponse.ok) {
+          console.warn('Message send webhook failed:', webhookResponse.statusText);
+          // Continue anyway - message was saved to database
+        } else {
+          console.log('Message send webhook sent successfully');
+        }
+      } catch (webhookError) {
+        console.error('Error calling message send webhook:', webhookError);
+        // Continue anyway - message was saved to database
+      }
+      
       // Success notification
       alert('Message sent successfully!');
       
