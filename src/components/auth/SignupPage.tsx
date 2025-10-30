@@ -71,7 +71,7 @@ export const SignupPage: React.FC = () => {
   // ✅ FIXED - Trigger Welcome Email via n8n Webhook (Simpler data structure)
   const triggerWelcomeEmail = async (email: string, name: string, userId: string) => {
     try {
-      const response = await fetch('http://localhost:5678/webhook/propertypro-signup', {
+      const response = await fetch('https://primary-production-e3df.up.railway.app/webhook/propertypro-signup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
